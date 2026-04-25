@@ -1,0 +1,13 @@
+langchain
+langchain-groq
+langchain-community
+web3
+python-dotenv
+requests
+redis
+pytest
+pytest-asyncio
+sqlalchemy
+pydantic
+black
+httpx

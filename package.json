@@ -1,0 +1,39 @@
+{
+  "name": "convexa",
+  "version": "1.0.0",
+  "description": "Submission for ETHGlobal Open Agents Hackathon 2026.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "install:all": "npm install && cd frontend && npm install",
+    "dev:frontend": "cd frontend && npm run dev",
+    "compile:contracts": "cd contracts && npx hardhat compile",
+    "deploy:contracts": "cd contracts && npx hardhat ignition deploy ./ignition/modules/DebateEscrow.ts --network unichainSepolia",
+    "test:contracts": "cd contracts && npx hardhat test",
+    "test:agents": "cd agents && pytest -v",
+    "axl:bull": "cd axl-nodes && ./axl start --port 8001 --name bull-agent",
+    "axl:bear": "cd axl-nodes && ./axl start --port 8002 --name bear-agent",
+    "axl:judge": "cd axl-nodes && ./axl start --port 8003 --name judge-agent"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swanandi-bhende/convexa.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/swanandi-bhende/convexa/issues"
+  },
+  "homepage": "https://github.com/swanandi-bhende/convexa#readme",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
+    "dotenv": "^17.4.2",
+    "ethers": "^6.16.0",
+    "hardhat": "^3.4.1"
+  }
+}

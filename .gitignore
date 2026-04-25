@@ -1,0 +1,41 @@
+# Environment & secrets
+.env
+.env.local
+.env.production
+*.key
+*.pem
+certs/private/
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Node & Hardhat
+node_modules/
+artifacts/
+cache/
+typechain-types/
+coverage/
+*.log
+frontend/.next/
+axl-nodes/axl
+
+# Database & data
+*.db
+*.sqlite
+/utils/db/*.db
+/data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

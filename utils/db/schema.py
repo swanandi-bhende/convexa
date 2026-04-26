@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -66,3 +66,38 @@ class MarketPriceBaseline(Base):
     pool_address: Mapped[str] = mapped_column(String(66), nullable=False)
     baseline_price: Mapped[float] = mapped_column(Float, nullable=False)
     baseline_timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class JudgeVerdict(Base):
+    """Stores one Judge verdict per round including delivery and onchain update status."""
+
+    __tablename__ = "judge_verdicts"
+    __table_args__ = (
+        CheckConstraint("bull_score >= 0 AND bull_score <= 100", name="ck_judge_verdicts_bull_score_0_100"),
+        CheckConstraint("bear_score >= 0 AND bear_score <= 100", name="ck_judge_verdicts_bear_score_0_100"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    bull_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    bear_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    winner: Mapped[str] = mapped_column(String(8), nullable=False)
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    bull_argument_received: Mapped[str] = mapped_column(Text, nullable=False)
+    bear_argument_received: Mapped[str] = mapped_column(Text, nullable=False)
+    accuracy_bonus_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    accuracy_bonus_recipient: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    conviction_update_status: Mapped[str] = mapped_column(String(16), nullable=False, default="failed")
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class AccuracyTracking(Base):
+    """Tracks whether previous round winners predicted the realized market direction correctly."""
+
+    __tablename__ = "accuracy_tracking"
+
+    round_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    predicted_winner: Mapped[str] = mapped_column(String(8), nullable=False)
+    actual_price_direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    prediction_correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    bonus_awarded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

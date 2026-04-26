@@ -8,7 +8,15 @@ from typing import Any
 from sqlalchemy import create_engine, desc, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from utils.db.schema import Base, BearRound, BullRound, MarketPriceBaseline, RoundComparison
+from utils.db.schema import (
+    AccuracyTracking,
+    Base,
+    BearRound,
+    BullRound,
+    JudgeVerdict,
+    MarketPriceBaseline,
+    RoundComparison,
+)
 
 
 DEFAULT_DATABASE_URL = "sqlite:///./utils/db/debate.db"
@@ -174,6 +182,113 @@ def upsert_market_price_baseline(token_pair: str, pool_address: str, baseline_pr
             existing.pool_address = pool_address
             existing.baseline_price = baseline_price
             existing.baseline_timestamp = baseline_timestamp
+
+        session.commit()
+        session.refresh(existing)
+        return existing
+
+
+def insert_judge_verdict(
+    *,
+    round_number: int,
+    bull_score: int,
+    bear_score: int,
+    winner: str,
+    reasoning: str,
+    bull_argument_received: str,
+    bear_argument_received: str,
+    accuracy_bonus_applied: bool,
+    accuracy_bonus_recipient: str | None,
+    conviction_update_status: str,
+) -> JudgeVerdict:
+    """Insert one Judge verdict row and return the persisted ORM object."""
+    with get_session() as session:
+        row = JudgeVerdict(
+            round_number=round_number,
+            bull_score=bull_score,
+            bear_score=bear_score,
+            winner=winner,
+            reasoning=reasoning,
+            bull_argument_received=bull_argument_received,
+            bear_argument_received=bear_argument_received,
+            accuracy_bonus_applied=accuracy_bonus_applied,
+            accuracy_bonus_recipient=accuracy_bonus_recipient,
+            conviction_update_status=conviction_update_status,
+            timestamp=datetime.utcnow(),
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+
+def upsert_accuracy_tracking(
+    *,
+    round_number: int,
+    predicted_winner: str,
+    actual_price_direction: str,
+    prediction_correct: bool,
+    bonus_awarded: bool,
+) -> AccuracyTracking:
+    """Create or update accuracy tracking row for a completed round."""
+    with get_session() as session:
+        stmt = select(AccuracyTracking).where(AccuracyTracking.round_number == round_number)
+        existing = session.scalar(stmt)
+        if existing is None:
+            existing = AccuracyTracking(
+                round_number=round_number,
+                predicted_winner=predicted_winner,
+                actual_price_direction=actual_price_direction,
+                prediction_correct=prediction_correct,
+                bonus_awarded=bonus_awarded,
+            )
+            session.add(existing)
+        else:
+            existing.predicted_winner = predicted_winner
+            existing.actual_price_direction = actual_price_direction
+            existing.prediction_correct = prediction_correct
+            existing.bonus_awarded = bonus_awarded
+
+        session.commit()
+        session.refresh(existing)
+        return existing
+
+
+def upsert_round_comparison_from_judge(
+    *,
+    round_number: int,
+    bull_confidence: int,
+    bear_confidence: int,
+    bull_axl_status: str,
+    bear_axl_status: str,
+) -> RoundComparison:
+    """Upsert round comparison after Judge receives or synthesizes both sides."""
+    with get_session() as session:
+        stmt = (
+            select(RoundComparison)
+            .where(RoundComparison.round_number == round_number)
+            .order_by(desc(RoundComparison.id))
+            .limit(1)
+        )
+        existing = session.scalar(stmt)
+
+        both_received = bull_axl_status == "sent" and bear_axl_status == "sent"
+        if existing is None:
+            existing = RoundComparison(
+                round_number=round_number,
+                bull_confidence=bull_confidence,
+                bear_confidence=bear_confidence,
+                bull_axl_status=bull_axl_status,
+                bear_axl_status=bear_axl_status,
+                both_received=both_received,
+            )
+            session.add(existing)
+        else:
+            existing.bull_confidence = bull_confidence
+            existing.bear_confidence = bear_confidence
+            existing.bull_axl_status = bull_axl_status
+            existing.bear_axl_status = bear_axl_status
+            existing.both_received = both_received
 
         session.commit()
         session.refresh(existing)

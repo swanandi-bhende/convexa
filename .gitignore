@@ -24,6 +24,7 @@ coverage/
 *.log
 frontend/.next/
 axl-nodes/axl
+axl-nodes/logs/
 
 # Database & data
 *.db

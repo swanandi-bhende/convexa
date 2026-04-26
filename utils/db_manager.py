@@ -13,8 +13,10 @@ from utils.db.schema import (
     Base,
     BearRound,
     BullRound,
+    DebateSession,
     JudgeVerdict,
     MarketPriceBaseline,
+    RoundTrace,
     RoundComparison,
 )
 
@@ -289,6 +291,127 @@ def upsert_round_comparison_from_judge(
             existing.bull_axl_status = bull_axl_status
             existing.bear_axl_status = bear_axl_status
             existing.both_received = both_received
+
+        session.commit()
+        session.refresh(existing)
+        return existing
+
+
+def insert_debate_session(
+    *,
+    session_id: str,
+    token_pair: str,
+    start_time: datetime,
+    total_rounds: int,
+    status: str,
+) -> DebateSession:
+    """Insert one debate session row and return the persisted ORM object."""
+    with get_session() as session:
+        row = DebateSession(
+            session_id=session_id,
+            token_pair=token_pair,
+            start_time=start_time,
+            end_time=None,
+            total_rounds=total_rounds,
+            winning_side=None,
+            final_bull_score=None,
+            final_bear_score=None,
+            settlement_triggered=False,
+            settlement_tx_hash=None,
+            status=status,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+
+def get_debate_session_by_session_id(session_id: str) -> DebateSession | None:
+    """Fetch one debate session by logical session_id UUID."""
+    with get_session() as session:
+        stmt = select(DebateSession).where(DebateSession.session_id == session_id)
+        return session.scalar(stmt)
+
+
+def update_debate_session(session_id: str, **fields: Any) -> DebateSession:
+    """Update one debate session row by session_id and return persisted object."""
+    with get_session() as session:
+        stmt = select(DebateSession).where(DebateSession.session_id == session_id)
+        row = session.scalar(stmt)
+        if row is None:
+            raise ValueError(f"Debate session not found for session_id={session_id}")
+
+        for key, value in fields.items():
+            if not hasattr(row, key):
+                raise ValueError(f"DebateSession has no field '{key}'")
+            setattr(row, key, value)
+
+        session.commit()
+        session.refresh(row)
+        return row
+
+
+def upsert_round_trace(
+    *,
+    session_id: str,
+    round_number: int,
+    market_snapshot_json: dict[str, Any] | None = None,
+    bull_argument_json: dict[str, Any] | None = None,
+    bear_argument_json: dict[str, Any] | None = None,
+    judge_verdict_json: dict[str, Any] | None = None,
+    bull_score_after_round: int | None = None,
+    bear_score_after_round: int | None = None,
+    conviction_tx_hash: str | None = None,
+    micro_settlement_tx_hash: str | None = None,
+    round_duration_seconds: float | None = None,
+    timestamp: datetime | None = None,
+) -> RoundTrace:
+    """Create or update a round audit row for a debate session."""
+    with get_session() as session:
+        stmt = (
+            select(RoundTrace)
+            .where(RoundTrace.session_id == session_id, RoundTrace.round_number == round_number)
+            .limit(1)
+        )
+        existing = session.scalar(stmt)
+
+        if existing is None:
+            existing = RoundTrace(
+                session_id=session_id,
+                round_number=round_number,
+                market_snapshot_json=(json.dumps(market_snapshot_json, default=str) if market_snapshot_json is not None else None),
+                bull_argument_json=(json.dumps(bull_argument_json, default=str) if bull_argument_json is not None else None),
+                bear_argument_json=(json.dumps(bear_argument_json, default=str) if bear_argument_json is not None else None),
+                judge_verdict_json=(json.dumps(judge_verdict_json, default=str) if judge_verdict_json is not None else None),
+                bull_score_after_round=bull_score_after_round,
+                bear_score_after_round=bear_score_after_round,
+                conviction_tx_hash=conviction_tx_hash,
+                micro_settlement_tx_hash=micro_settlement_tx_hash,
+                round_duration_seconds=round_duration_seconds,
+                timestamp=timestamp or datetime.utcnow(),
+            )
+            session.add(existing)
+        else:
+            if market_snapshot_json is not None:
+                existing.market_snapshot_json = json.dumps(market_snapshot_json, default=str)
+            if bull_argument_json is not None:
+                existing.bull_argument_json = json.dumps(bull_argument_json, default=str)
+            if bear_argument_json is not None:
+                existing.bear_argument_json = json.dumps(bear_argument_json, default=str)
+            if judge_verdict_json is not None:
+                existing.judge_verdict_json = json.dumps(judge_verdict_json, default=str)
+            if bull_score_after_round is not None:
+                existing.bull_score_after_round = bull_score_after_round
+            if bear_score_after_round is not None:
+                existing.bear_score_after_round = bear_score_after_round
+            if conviction_tx_hash is not None:
+                existing.conviction_tx_hash = conviction_tx_hash
+            if micro_settlement_tx_hash is not None:
+                existing.micro_settlement_tx_hash = micro_settlement_tx_hash
+            if round_duration_seconds is not None:
+                existing.round_duration_seconds = round_duration_seconds
+            if timestamp is not None:
+                existing.timestamp = timestamp
 
         session.commit()
         session.refresh(existing)

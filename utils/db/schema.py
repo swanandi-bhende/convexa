@@ -101,3 +101,41 @@ class AccuracyTracking(Base):
     actual_price_direction: Mapped[str] = mapped_column(String(8), nullable=False)
     prediction_correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
     bonus_awarded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class DebateSession(Base):
+    """Stores top-level lifecycle and settlement details for each debate session."""
+
+    __tablename__ = "debate_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True, index=True)
+    token_pair: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    end_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    total_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    winning_side: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    final_bull_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    final_bear_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    settlement_triggered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    settlement_tx_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="IDLE", index=True)
+
+
+class RoundTrace(Base):
+    """Complete per-round audit trail with raw artifacts and onchain side effects."""
+
+    __tablename__ = "round_trace"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    round_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    market_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bull_argument_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bear_argument_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_verdict_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bull_score_after_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bear_score_after_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    conviction_tx_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    micro_settlement_tx_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    round_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)

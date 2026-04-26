@@ -16,6 +16,7 @@ contract ConvictionTracker {
     uint256 public currentBearScore = 50;
     uint256 public currentRound;
     uint256 public winThreshold;
+    uint256 public maxRounds = 20;
     bool public debateActive;
     bool public settlementTriggered;
     RoundResult[] public roundHistory;
@@ -51,43 +52,65 @@ contract ConvictionTracker {
         _;
     }
 
-    function updateConviction(uint256 bullScore, uint256 bearScore) external onlyJudge {
+    function updateConviction(
+        uint256 bullScore,
+        uint256 bearScore,
+        uint256 roundNumber
+    ) external onlyJudge {
         require(debateActive, "Debate is not active");
         require(!settlementTriggered, "Settlement already triggered");
+        require(roundNumber == currentRound + 1, "Invalid round number");
 
-        currentRound += 1;
         currentBullScore = bullScore;
         currentBearScore = bearScore;
-
-        address winner = address(0);
-        if (bullScore >= winThreshold && bullScore >= bearScore) {
-            winner = address(1);
-        } else if (bearScore >= winThreshold) {
-            winner = address(2);
-        }
+        currentRound = roundNumber;
 
         roundHistory.push(
             RoundResult({
-                roundNumber: currentRound,
+                roundNumber: roundNumber,
                 bullScore: bullScore,
                 bearScore: bearScore,
-                winner: winner,
+                winner: address(0),
                 timestamp: block.timestamp
             })
         );
 
-        emit ConvictionUpdated(currentRound, bullScore, bearScore, block.timestamp);
+        emit ConvictionUpdated(roundNumber, bullScore, bearScore, block.timestamp);
 
-        if (winner != address(0)) {
+        if (bullScore >= winThreshold) {
             debateActive = false;
             settlementTriggered = true;
-
-            if (winner == address(1)) {
-                emit DebateWinnerDeclared("BULL", bullScore, bearScore, currentRound);
-            } else {
-                emit DebateWinnerDeclared("BEAR", bullScore, bearScore, currentRound);
-            }
+            roundHistory[roundHistory.length - 1].winner = address(1);
+            emit DebateWinnerDeclared("BULL", bullScore, bearScore, roundNumber);
+        } else if (bearScore >= winThreshold) {
+            debateActive = false;
+            settlementTriggered = true;
+            roundHistory[roundHistory.length - 1].winner = address(2);
+            emit DebateWinnerDeclared("BEAR", bullScore, bearScore, roundNumber);
+        } else if (currentRound >= maxRounds) {
+            debateActive = false;
         }
+    }
+
+    function getCurrentScores()
+        external
+        view
+        returns (uint256 bullScore, uint256 bearScore, uint256 roundNumber, bool isActive)
+    {
+        return (currentBullScore, currentBearScore, currentRound, debateActive);
+    }
+
+    function getRoundHistory() external view returns (RoundResult[] memory) {
+        return roundHistory;
+    }
+
+    function getRound(uint256 roundNumber) external view returns (RoundResult memory) {
+        require(roundNumber > 0 && roundNumber <= roundHistory.length, "Round out of range");
+        return roundHistory[roundNumber - 1];
+    }
+
+    function isSettlementTriggered() external view returns (bool) {
+        return settlementTriggered;
     }
 
     function startDebate() external onlyOwner {

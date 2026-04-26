@@ -859,3 +859,112 @@ def fetch_market_snapshot(token_pair: str) -> MarketSnapshot:
 def fetch_snapshot(token_pair: str) -> MarketSnapshot:
     """Compatibility wrapper for orchestrator calls."""
     return fetch_market_snapshot(token_pair)
+
+
+def _wallet_inflow_count_from_snapshot(snapshot: MarketSnapshot) -> int | None:
+    outflow_source = snapshot.raw_market_data.get("outflow_source", {})
+    swaps = outflow_source.get("swaps")
+    if not isinstance(swaps, list):
+        return None
+
+    large_swap_usd = float(os.getenv("LARGE_SWAP_USD_THRESHOLD", "50000"))
+    inflow = 0
+    for swap in swaps:
+        amount_usd = abs(float(swap.get("amountUSD") or 0.0))
+        amount0 = float(swap.get("amount0") or 0.0)
+        amount1 = float(swap.get("amount1") or 0.0)
+        has_pool_inflow = (amount0 > 0) or (amount1 > 0)
+        if has_pool_inflow and amount_usd >= large_swap_usd:
+            inflow += 1
+
+    return inflow
+
+
+def _recent_large_lp_additions(pool_address: str) -> tuple[int, float, dict[str, Any]]:
+    endpoint = os.getenv("THEGRAPH_UNISWAP_V3_ENDPOINT", "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3")
+    large_lp_usd = float(os.getenv("LARGE_LP_ADDITION_USD_THRESHOLD", "50000"))
+    since = int((datetime.now(UTC) - timedelta(hours=6)).timestamp())
+
+    query = """
+    query PoolMints($pool: String!, $since: Int!) {
+      mints(
+        first: 250
+        orderBy: timestamp
+        orderDirection: desc
+        where: { pool: $pool, timestamp_gte: $since }
+      ) {
+        timestamp
+        amountUSD
+      }
+    }
+    """
+
+    data = _graphql_request(endpoint, query, {"pool": pool_address.lower(), "since": since})
+    mints = data.get("mints", [])
+
+    count = 0
+    total_usd = 0.0
+    for mint in mints:
+        amount_usd = float(mint.get("amountUSD") or 0.0)
+        if amount_usd >= large_lp_usd:
+            count += 1
+            total_usd += amount_usd
+
+    return count, float(total_usd), {
+        "source": "thegraph:mints",
+        "since": since,
+        "checked_mints": len(mints),
+        "large_lp_usd_threshold": large_lp_usd,
+    }
+
+
+def format_for_bear(snapshot: MarketSnapshot) -> str:
+    """Format a neutral/bear-leaning summary from an existing MarketSnapshot."""
+    return (
+        f"Token pair: {snapshot.token_pair}. "
+        f"Current price: {snapshot.current_price:.6f}. "
+        f"24h baseline price: {snapshot.baseline_price_24h:.6f}. "
+        f"24h price change: {snapshot.price_change_24h_pct:.2f}%. "
+        f"Volume delta: {snapshot.volume_delta_24h_pct:.2f}% "
+        f"(last 24h: ${snapshot.volume_last_24h_usd:,.2f}, prior 24h: ${snapshot.volume_prev_24h_usd:,.2f}). "
+        f"Large wallet outflows in last 2h: {snapshot.wallet_outflow_count_2h} transactions. "
+        f"Pool address: {snapshot.pool_address}."
+    )
+
+
+def format_for_bull(snapshot: MarketSnapshot) -> str:
+    """Format a bull-leaning summary from the same snapshot plus LP-addition context."""
+    inflow_count = _wallet_inflow_count_from_snapshot(snapshot)
+
+    lp_count: int | None = None
+    lp_total_usd: float | None = None
+    lp_error: str | None = None
+    try:
+        lp_count, lp_total_usd, _ = _recent_large_lp_additions(snapshot.pool_address)
+    except Exception as exc:  # noqa: BLE001 - keep formatter resilient
+        lp_error = f"{type(exc).__name__}: {exc}"
+
+    inflow_text = (
+        str(inflow_count)
+        if inflow_count is not None
+        else "unavailable (source does not expose swap-level inflows)"
+    )
+
+    lp_text = (
+        f"{lp_count} large LP additions totaling ${lp_total_usd:,.2f} in last 6h"
+        if lp_count is not None and lp_total_usd is not None
+        else f"unavailable ({lp_error or 'The Graph query failed'})"
+    )
+
+    return (
+        f"Token pair: {snapshot.token_pair}. "
+        f"Current price: {snapshot.current_price:.6f}. "
+        f"24h baseline price: {snapshot.baseline_price_24h:.6f}. "
+        f"24h price change: {snapshot.price_change_24h_pct:.2f}% "
+        f"(positive supports bullish continuation). "
+        f"Volume acceleration: {snapshot.volume_delta_24h_pct:.2f}% "
+        f"(last 24h: ${snapshot.volume_last_24h_usd:,.2f}, prior 24h: ${snapshot.volume_prev_24h_usd:,.2f}). "
+        f"Large wallet inflows in last 2h: {inflow_text}. "
+        f"Recent large LP additions: {lp_text}. "
+        f"Pool address: {snapshot.pool_address}."
+    )

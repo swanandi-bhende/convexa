@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import create_engine, desc, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from utils.db.schema import Base, BearRound, MarketPriceBaseline
+from utils.db.schema import Base, BearRound, BullRound, MarketPriceBaseline, RoundComparison
 
 
 DEFAULT_DATABASE_URL = "sqlite:///./utils/db/debate.db"
@@ -71,6 +71,83 @@ def get_recent_bear_rounds(limit: int = 20) -> list[BearRound]:
     with get_session() as session:
         stmt = select(BearRound).order_by(desc(BearRound.timestamp)).limit(limit)
         return list(session.scalars(stmt).all())
+
+
+def insert_bull_round(
+    *,
+    round_number: int,
+    token_pair: str,
+    argument: str,
+    confidence: int,
+    key_metrics: list[str],
+    raw_market_data: dict[str, Any],
+    axl_delivery_status: str = "pending",
+) -> BullRound:
+    """Insert a bull round log row and return the persisted ORM object."""
+    with get_session() as session:
+        row = BullRound(
+            round_number=round_number,
+            token_pair=token_pair,
+            argument=argument,
+            confidence=confidence,
+            key_metrics=json.dumps(key_metrics),
+            raw_market_data=json.dumps(raw_market_data),
+            axl_delivery_status=axl_delivery_status,
+            timestamp=datetime.utcnow(),
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+
+def get_recent_bull_rounds(limit: int = 20) -> list[BullRound]:
+    """Fetch most recent bull round entries."""
+    with get_session() as session:
+        stmt = select(BullRound).order_by(desc(BullRound.timestamp)).limit(limit)
+        return list(session.scalars(stmt).all())
+
+
+def upsert_round_comparison_from_bull(*, round_number: int, bull_confidence: int, bull_axl_status: str) -> RoundComparison:
+    """Upsert comparison state using a completed Bull round, merging Bear state when available."""
+    with get_session() as session:
+        bear_stmt = (
+            select(BearRound)
+            .where(BearRound.round_number == round_number)
+            .order_by(desc(BearRound.timestamp))
+            .limit(1)
+        )
+        bear_row = session.scalar(bear_stmt)
+
+        comparison_stmt = (
+            select(RoundComparison)
+            .where(RoundComparison.round_number == round_number)
+            .order_by(desc(RoundComparison.id))
+            .limit(1)
+        )
+        comparison = session.scalar(comparison_stmt)
+
+        if comparison is None:
+            comparison = RoundComparison(
+                round_number=round_number,
+                bull_confidence=bull_confidence,
+                bear_confidence=(int(bear_row.confidence) if bear_row is not None else None),
+                bull_axl_status=bull_axl_status,
+                bear_axl_status=(str(bear_row.axl_delivery_status) if bear_row is not None else None),
+                both_received=bear_row is not None,
+            )
+            session.add(comparison)
+        else:
+            comparison.bull_confidence = bull_confidence
+            comparison.bull_axl_status = bull_axl_status
+            if bear_row is not None:
+                comparison.bear_confidence = int(bear_row.confidence)
+                comparison.bear_axl_status = str(bear_row.axl_delivery_status)
+                comparison.both_received = True
+
+        session.commit()
+        session.refresh(comparison)
+        return comparison
 
 
 def get_market_price_baseline(token_pair: str) -> MarketPriceBaseline | None:

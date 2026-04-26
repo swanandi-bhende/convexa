@@ -10,45 +10,40 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
+from langchain_core.exceptions import OutputParserException
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_groq import ChatGroq
-from pydantic import BaseModel, Field, conint
+from pydantic import BaseModel, Field, ValidationError, conint
+
+
+SYSTEM_PROMPT = (
+    "You are a Bull analyst specializing in onchain market analysis. "
+    "You will receive real token market data each round. "
+    "Your job is to construct the most compelling bullish argument supported by the data provided. "
+    "You must output ONLY valid JSON with exactly three fields: argument (a 2-3 sentence bullish case citing specific numbers from the data), confidence (an integer 0-100 representing how strongly the data supports a bullish thesis), and keyMetrics (a list of 2-4 strings each naming a specific metric and its value that supports your argument). Never output anything outside the JSON object. Never add markdown formatting or code fences."
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.db_manager import init_database, insert_bear_round
-from utils.market_data import MarketSnapshot, fetch_snapshot, format_for_bear
+from utils.db_manager import init_database, insert_bull_round, upsert_round_comparison_from_bull
+from utils.market_data import MarketSnapshot, fetch_snapshot, format_for_bull
 
 
-SYSTEM_PROMPT = (
-    "You are a Bear analyst specializing in onchain market analysis. "
-    "You will receive real token market data each round. "
-    "Your job is to construct the most compelling bearish argument supported by the data provided. "
-    # Prompt iteration note: we explicitly require numeric citations, field names, and confidence calibration examples
-    # to reduce vague arguments and malformed JSON during repeated live rounds.
-    "You must output ONLY valid JSON with exactly three fields: argument (string), confidence (integer 0-100), and keyMetrics (array of 2-4 strings). "
-    "The argument must be 2-3 sentences and include at least two specific metric values exactly as numbers from the provided data. "
-    "Confidence calibration: use 80-100 for strongly bearish aligned signals, 40-60 for mixed signals, and 0-39 for weak bearish evidence. "
-    "Each keyMetrics item must include metric name plus value, for example: '24h price change: -3.2%'. "
-    "Never output anything outside the JSON object. Never add markdown formatting or code fences."
-)
-
-
-class BearAgentOutput(BaseModel):
-    argument: str = Field(description="A 2-3 sentence bearish thesis grounded in market metrics")
+class BullAgentOutput(BaseModel):
+    argument: str = Field(description="A 2-3 sentence bullish thesis grounded in market metrics")
     confidence: conint(ge=0, le=100) = Field(description="Confidence score from 0 to 100")
     keyMetrics: list[str] = Field(min_length=2, max_length=4, description="2-4 key metric strings")
 
 
 load_dotenv()
-# Bear agent communicates exclusively with the Judge node via AXL. Direct Bull-Bear communication is architecturally prohibited.
+# Bull agent communicates exclusively with the Judge node via AXL. Direct Bull-Bear communication is architecturally prohibited.
 ALLOWED_DESTINATIONS = [os.getenv("JUDGE_AXL_PEER_ID", "")]
-_init_parser = JsonOutputParser(pydantic_object=BearAgentOutput)
+_init_parser = JsonOutputParser(pydantic_object=BullAgentOutput)
 
 PROMPT_TEMPLATE = ChatPromptTemplate.from_messages(
     [
@@ -62,16 +57,16 @@ PROMPT_TEMPLATE = ChatPromptTemplate.from_messages(
 )
 
 LLM = ChatGroq(
-    model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    model="llama3-70b-8192",
     temperature=0.3,
 )
 
-PARSER = JsonOutputParser(pydantic_object=BearAgentOutput)
-BEAR_CHAIN: Runnable[dict[str, Any], dict[str, Any]] = PROMPT_TEMPLATE | LLM | PARSER
+PARSER = JsonOutputParser(pydantic_object=BullAgentOutput)
+BULL_CHAIN: Runnable[dict[str, Any], dict[str, Any]] = PROMPT_TEMPLATE | LLM | PARSER
 
 
 DEFAULT_FALLBACK_ARGUMENT = {
-    "argument": "Market signals are temporarily unavailable, so the bearish case is weak for this round. Risk remains elevated due to missing confirmatory data.",
+    "argument": "Market signals are temporarily unavailable, so the bullish case is weak for this round. Upside remains possible but unconfirmed due to missing data.",
     "confidence": 25,
     "keyMetrics": [
         "data availability: partial",
@@ -87,37 +82,39 @@ def _is_specific_metric(metric: str) -> bool:
 def _default_key_metrics(snapshot: MarketSnapshot) -> list[str]:
     return [
         f"24h price change: {snapshot.price_change_24h_pct:.2f}%",
-        f"large wallet outflows 2h: {snapshot.wallet_outflow_count_2h}",
+        f"24h volume delta: {snapshot.volume_delta_24h_pct:.2f}%",
         f"current price: {snapshot.current_price:.6f}",
         f"24h baseline price: {snapshot.baseline_price_24h:.6f}",
     ]
 
 
 def _calibrate_confidence(snapshot: MarketSnapshot, llm_confidence: int) -> int:
-    # Deterministic confidence calibration avoids flat scores once real market data varies.
+    # Deterministic confidence calibration keeps scoring tied to bullish signal alignment.
     score = 25
     price_change = snapshot.price_change_24h_pct
     volume_delta = snapshot.volume_delta_24h_pct
     outflows = snapshot.wallet_outflow_count_2h
 
-    if price_change <= -3:
+    if price_change >= 3:
         score += 25
-    elif price_change <= -1:
-        score += 15
     elif price_change >= 1:
+        score += 15
+    elif price_change <= -1:
         score -= 10
 
-    if volume_delta <= -20:
+    if volume_delta >= 20:
         score += 25
-    elif volume_delta <= -5:
+    elif volume_delta >= 5:
         score += 15
-    elif volume_delta >= 10:
+    elif volume_delta <= -10:
         score -= 10
 
     if outflows >= 10:
-        score += 20
+        score -= 20
     elif outflows >= 3:
-        score += 10
+        score -= 10
+    else:
+        score += 5
 
     if snapshot.current_price <= 0 or snapshot.pool_address == "unknown":
         score = min(score, 35)
@@ -170,42 +167,76 @@ def _post_process_argument(payload: dict[str, Any], snapshot: MarketSnapshot) ->
     }
 
 
-def generate_bear_argument(market_snapshot: MarketSnapshot, round_number: int) -> dict[str, Any]:
-    """Generate a validated bearish argument for one round with robust fallback behavior."""
-    market_summary = format_for_bear(market_snapshot)
+def _is_strongly_negative_for_bull(snapshot: MarketSnapshot) -> bool:
+    price_strongly_down = snapshot.price_change_24h_pct <= -5.0
+    outflows_dominant = snapshot.wallet_outflow_count_2h >= 10
+    volume_sharply_declining = snapshot.volume_delta_24h_pct <= -20.0
+    return price_strongly_down and outflows_dominant and volume_sharply_declining
+
+
+def _apply_bull_confidence_cap(argument_dict: dict[str, Any], snapshot: MarketSnapshot) -> dict[str, Any]:
+    if not _is_strongly_negative_for_bull(snapshot):
+        return argument_dict
+
+    capped = dict(argument_dict)
+    capped["confidence"] = min(int(capped.get("confidence", 0)), 45)
+    return capped
+
+
+def generate_bull_argument(market_snapshot: MarketSnapshot, round_number: int) -> dict[str, Any]:
+    """Generate a validated bullish argument for one round with robust fallback behavior."""
+    market_summary = format_for_bull(market_snapshot)
 
     try:
-        response = BEAR_CHAIN.invoke(
+        response = BULL_CHAIN.invoke(
             {
                 "market_data": market_summary,
                 "format_instructions": _init_parser.get_format_instructions(),
             }
         )
-        validated = BearAgentOutput.model_validate(response)
-        return _post_process_argument(validated.model_dump(), market_snapshot)
-    except Exception as exc:  # noqa: BLE001 - includes Groq transport/model errors and parser failures
+        validated = BullAgentOutput.model_validate(response)
+        processed = _post_process_argument(validated.model_dump(), market_snapshot)
+        return _apply_bull_confidence_cap(processed, market_snapshot)
+    except httpx.HTTPError as exc:
         fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
         fallback["argument"] = (
-            f"Round {round_number}: unable to generate full bearish analysis due to model or parser error "
+            f"Round {round_number}: unable to generate full bullish analysis due to model network error "
             f"({type(exc).__name__}). Defaulting to low-confidence output."
         )
-        return _post_process_argument(fallback, market_snapshot)
+        processed = _post_process_argument(fallback, market_snapshot)
+        return _apply_bull_confidence_cap(processed, market_snapshot)
+    except (OutputParserException, ValidationError, ValueError, TypeError) as exc:
+        fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
+        fallback["argument"] = (
+            f"Round {round_number}: unable to generate full bullish analysis due to parser or schema error "
+            f"({type(exc).__name__}). Defaulting to low-confidence output."
+        )
+        processed = _post_process_argument(fallback, market_snapshot)
+        return _apply_bull_confidence_cap(processed, market_snapshot)
+    except Exception as exc:  # noqa: BLE001 - non-network/runtime fallback
+        fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
+        fallback["argument"] = (
+            f"Round {round_number}: unable to generate full bullish analysis due to unexpected runtime error "
+            f"({type(exc).__name__}). Defaulting to low-confidence output."
+        )
+        processed = _post_process_argument(fallback, market_snapshot)
+        return _apply_bull_confidence_cap(processed, market_snapshot)
 
 
 def publish_to_judge(argument_dict: dict[str, Any], round_number: int) -> bool:
-    """Publish Bear round output to Judge via local AXL HTTP endpoint."""
+    """Publish Bull round output to Judge via local AXL HTTP endpoint."""
     judge_peer_id = os.getenv("JUDGE_AXL_PEER_ID")
     if not judge_peer_id:
         return False
 
     assert len(ALLOWED_DESTINATIONS) == 1 and judge_peer_id == ALLOWED_DESTINATIONS[0], (
-        "Invalid destination: Bear is only permitted to send to the Judge node"
+        "Invalid destination: Bull is only permitted to send to the Judge node"
     )
 
-    axl_base_url = os.getenv("BEAR_AXL_HTTP_URL", "http://localhost:8001").rstrip("/")
+    axl_base_url = os.getenv("BULL_AXL_HTTP_URL", "http://localhost:8002").rstrip("/")
     axl_send_url = f"{axl_base_url}/send"
     payload = {
-        "sender": "bear",
+        "sender": "bull",
         "round": round_number,
         "argument": argument_dict,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -224,8 +255,8 @@ def publish_to_judge(argument_dict: dict[str, Any], round_number: int) -> bool:
         return False
 
 
-def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
-    """Execute one complete Bear round: fetch, reason, publish, log, and summarize."""
+def run_bull_round(round_number: int, token_pair: str) -> dict[str, Any]:
+    """Execute one complete Bull round: fetch, reason, publish, log, and summarize."""
     init_database()
 
     snapshot: MarketSnapshot | None = None
@@ -251,7 +282,7 @@ def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
             raw_market_data={"error": market_fetch_error or "unknown fetch failure"},
         )
 
-    argument_dict = generate_bear_argument(snapshot, round_number)
+    argument_dict = generate_bull_argument(snapshot, round_number)
     axl_sent = publish_to_judge(argument_dict, round_number)
     axl_status = "sent" if axl_sent else "failed"
 
@@ -261,7 +292,7 @@ def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
 
     snapshot_payload = json.loads(json.dumps(asdict(snapshot), default=str))
 
-    insert_bear_round(
+    insert_bull_round(
         round_number=round_number,
         token_pair=token_pair,
         argument=str(argument_dict.get("argument", "")),
@@ -271,9 +302,15 @@ def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
         axl_delivery_status=axl_status,
     )
 
+    upsert_round_comparison_from_bull(
+        round_number=round_number,
+        bull_confidence=int(argument_dict.get("confidence", 0)),
+        bull_axl_status=axl_status,
+    )
+
     argument_preview = str(argument_dict.get("argument", ""))[:90]
     print(
-        f"[BEAR] Round {round_number} | "
+        f"[BULL] Round {round_number} | "
         f"Confidence: {argument_dict.get('confidence', 0)} | "
         f"AXL: {axl_status} | "
         f"Argument: {argument_preview}"
@@ -290,6 +327,6 @@ def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
 
 if __name__ == "__main__":
     load_dotenv()
-    result = run_bear_round(round_number=1, token_pair="ETH/USDC")
+    result = run_bull_round(round_number=1, token_pair="ETH/USDC")
     print(json.dumps(result["argument"], indent=2))
     print(f"AXL delivery success: {result['axl_delivery_success']}")

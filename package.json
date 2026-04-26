@@ -14,9 +14,9 @@
     "deploy:contracts": "cd contracts && npx hardhat ignition deploy ./ignition/modules/DebateEscrow.ts --network unichainSepolia",
     "test:contracts": "cd contracts && npx hardhat test",
     "test:agents": "cd agents && pytest -v",
-    "axl:bull": "cd axl-nodes && ./axl start --port 8001 --name bull-agent",
-    "axl:bear": "cd axl-nodes && ./axl start --port 8002 --name bear-agent",
-    "axl:judge": "cd axl-nodes && ./axl start --port 8003 --name judge-agent"
+    "axl:bull": "cd axl-nodes/bull && ../axl -config node-config.json",
+    "axl:bear": "cd axl-nodes/bear && ../axl -config node-config.json",
+    "axl:judge": "cd axl-nodes/judge && ../axl -config node-config.json"
   },
   "repository": {
     "type": "git",

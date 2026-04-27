@@ -81,19 +81,19 @@ def _is_specific_metric(metric: str) -> bool:
 
 def _default_key_metrics(snapshot: MarketSnapshot) -> list[str]:
     return [
-        f"24h price change: {snapshot.price_change_24h_pct:.2f}%",
-        f"24h volume delta: {snapshot.volume_delta_24h_pct:.2f}%",
+        f"24h price change: {snapshot.price_change_24h_percent:.2f}%",
+        f"24h volume delta: {snapshot.volume_delta_percent:.2f}%",
         f"current price: {snapshot.current_price:.6f}",
-        f"24h baseline price: {snapshot.baseline_price_24h:.6f}",
+        f"24h baseline price: {snapshot.price_24h_ago:.6f}",
     ]
 
 
 def _calibrate_confidence(snapshot: MarketSnapshot, llm_confidence: int) -> int:
     # Deterministic confidence calibration keeps scoring tied to bullish signal alignment.
     score = 25
-    price_change = snapshot.price_change_24h_pct
-    volume_delta = snapshot.volume_delta_24h_pct
-    outflows = snapshot.wallet_outflow_count_2h
+    price_change = snapshot.price_change_24h_percent
+    volume_delta = snapshot.volume_delta_percent
+    outflows = snapshot.large_outflow_count
 
     if price_change >= 3:
         score += 25
@@ -116,7 +116,7 @@ def _calibrate_confidence(snapshot: MarketSnapshot, llm_confidence: int) -> int:
     else:
         score += 5
 
-    if snapshot.current_price <= 0 or snapshot.pool_address == "unknown":
+    if snapshot.current_price <= 0:
         score = min(score, 35)
 
     combined = int(round((score + llm_confidence) / 2))
@@ -128,9 +128,9 @@ def _post_process_argument(payload: dict[str, Any], snapshot: MarketSnapshot) ->
     if not _is_specific_metric(argument):
         argument = (
             f"{argument} "
-            f"Observed values: 24h price change {snapshot.price_change_24h_pct:.2f}%, "
-            f"volume delta {snapshot.volume_delta_24h_pct:.2f}%, "
-            f"outflows {snapshot.wallet_outflow_count_2h}."
+            f"Observed values: 24h price change {snapshot.price_change_24h_percent:.2f}%, "
+            f"volume delta {snapshot.volume_delta_percent:.2f}%, "
+            f"outflows {snapshot.large_outflow_count}."
         ).strip()
 
     metrics = payload.get("keyMetrics", [])
@@ -168,9 +168,9 @@ def _post_process_argument(payload: dict[str, Any], snapshot: MarketSnapshot) ->
 
 
 def _is_strongly_negative_for_bull(snapshot: MarketSnapshot) -> bool:
-    price_strongly_down = snapshot.price_change_24h_pct <= -5.0
-    outflows_dominant = snapshot.wallet_outflow_count_2h >= 10
-    volume_sharply_declining = snapshot.volume_delta_24h_pct <= -20.0
+    price_strongly_down = snapshot.price_change_24h_percent <= -5.0
+    outflows_dominant = snapshot.large_outflow_count >= 10
+    volume_sharply_declining = snapshot.volume_delta_percent <= -20.0
     return price_strongly_down and outflows_dominant and volume_sharply_declining
 
 
@@ -270,16 +270,8 @@ def run_bull_round(round_number: int, token_pair: str) -> dict[str, Any]:
         # Minimal snapshot fallback to keep round execution non-fatal.
         snapshot = MarketSnapshot(
             token_pair=token_pair,
-            pool_address="unknown",
-            current_price=0.0,
-            baseline_price_24h=0.0,
-            price_change_24h_pct=0.0,
-            volume_last_24h_usd=0.0,
-            volume_prev_24h_usd=0.0,
-            volume_delta_24h_pct=0.0,
-            wallet_outflow_count_2h=0,
-            fetched_at=datetime.now(UTC).replace(tzinfo=None),
-            raw_market_data={"error": market_fetch_error or "unknown fetch failure"},
+            timestamp=datetime.now(UTC),
+            fetch_errors=[market_fetch_error or "unknown fetch failure"],
         )
 
     argument_dict = generate_bull_argument(snapshot, round_number)

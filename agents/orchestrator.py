@@ -194,13 +194,23 @@ def _send_contract_tx(
     contract_function: Any,
     gas_limit_env_var: str,
 ) -> str:
+    chain_id = int(web3.eth.chain_id)
+    if os.getenv("BLOCK_REAL_MONEY_TRANSACTIONS", "1") == "1":
+        allowed_raw = os.getenv("TX_ALLOWED_CHAIN_IDS", "1301,11155111,84532,421614")
+        allowed_ids = {int(item.strip()) for item in allowed_raw.split(",") if item.strip()}
+        if chain_id not in allowed_ids:
+            raise RuntimeError(
+                f"Transaction blocked by safety policy on chain_id={chain_id}. "
+                "Set TX_ALLOWED_CHAIN_IDS or disable BLOCK_REAL_MONEY_TRANSACTIONS for explicit override."
+            )
+
     account = web3.eth.account.from_key(private_key)
     nonce = web3.eth.get_transaction_count(account.address)
     tx = contract_function.build_transaction(
         {
             "from": account.address,
             "nonce": nonce,
-            "chainId": int(web3.eth.chain_id),
+            "chainId": chain_id,
             "gas": int(os.getenv(gas_limit_env_var, "350000")),
             "gasPrice": int(web3.eth.gas_price),
         }

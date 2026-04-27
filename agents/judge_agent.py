@@ -546,6 +546,13 @@ def _update_conviction_onchain(verdict_dict: dict[str, Any], round_number: int) 
         if not web3.is_connected():
             return False, "failed:rpc unavailable"
 
+        chain_id = int(web3.eth.chain_id)
+        if os.getenv("BLOCK_REAL_MONEY_TRANSACTIONS", "1") == "1":
+            allowed_raw = os.getenv("TX_ALLOWED_CHAIN_IDS", "1301,11155111,84532,421614")
+            allowed_ids = {int(item.strip()) for item in allowed_raw.split(",") if item.strip()}
+            if chain_id not in allowed_ids:
+                return False, f"failed:safety blocked chain_id={chain_id}"
+
         account = web3.eth.account.from_key(private_key)
         contract = web3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=abi)
         nonce = web3.eth.get_transaction_count(account.address)
@@ -557,7 +564,7 @@ def _update_conviction_onchain(verdict_dict: dict[str, Any], round_number: int) 
             {
                 "from": account.address,
                 "nonce": nonce,
-                "chainId": int(web3.eth.chain_id),
+                "chainId": chain_id,
                 "gas": int(os.getenv("CONVICTION_UPDATE_GAS_LIMIT", "350000")),
                 "gasPrice": int(web3.eth.gas_price),
             }
@@ -616,16 +623,8 @@ def run_judge_round(round_number: int, token_pair: str) -> dict[str, Any]:
     if snapshot is None:
         snapshot = MarketSnapshot(
             token_pair=token_pair,
-            pool_address="unknown",
-            current_price=0.0,
-            baseline_price_24h=0.0,
-            price_change_24h_pct=0.0,
-            volume_last_24h_usd=0.0,
-            volume_prev_24h_usd=0.0,
-            volume_delta_24h_pct=0.0,
-            wallet_outflow_count_2h=0,
-            fetched_at=datetime.now(UTC).replace(tzinfo=None),
-            raw_market_data={"error": market_fetch_error or "unknown fetch failure"},
+            timestamp=datetime.now(UTC),
+            fetch_errors=[market_fetch_error or "unknown fetch failure"],
         )
 
     verdict = score_round(

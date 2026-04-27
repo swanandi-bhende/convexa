@@ -216,3 +216,107 @@ class SwapWarning(Base):
     quote_id: Mapped[int | None] = mapped_column(ForeignKey("swap_quotes.id"), nullable=True, index=True)
     execution_id: Mapped[int | None] = mapped_column(ForeignKey("swap_executions.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class KeeperHubJob(Base):
+    """Tracks KeeperHub-submitted execution jobs for swaps and conviction updates."""
+
+    __tablename__ = "keeperhub_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "job_type IN ('micro_settlement', 'final_settlement', 'conviction_update')",
+            name="ck_keeperhub_jobs_job_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    swap_quote_id: Mapped[int | None] = mapped_column(ForeignKey("swap_quotes.id"), nullable=True, index=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    max_gas_price_gwei: Mapped[float | None] = mapped_column(Float, nullable=True)
+    deadline_timestamp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_policy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_status: Mapped[str] = mapped_column(String(32), nullable=False, default="submitted", index=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    tx_hash: Mapped[str | None] = mapped_column(String(66), nullable=True, index=True)
+    actual_gas_price_gwei: Mapped[float | None] = mapped_column(Float, nullable=True)
+    keeperhub_fee_wei: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class KeeperHubRetry(Base):
+    """Normalized retry history for KeeperHub jobs."""
+
+    __tablename__ = "keeperhub_retries"
+
+    job_id: Mapped[str] = mapped_column(ForeignKey("keeperhub_jobs.job_id"), primary_key=True)
+    retry_attempt_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    retry_reason: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    retry_timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    retry_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class AgentMemorySnapshot(Base):
+    """Persistent serialized snapshots of an agent's LangChain memory."""
+
+    __tablename__ = "agent_memory_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    memory_json: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class ArgumentPerformance(Base):
+    """Raw per-argument performance records used for learning."""
+
+    __tablename__ = "argument_performance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    argument_text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence_submitted: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    judge_score_received: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metrics_cited: Mapped[str] = mapped_column(Text, nullable=False)
+    won_round: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    accuracy_bonus_received: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class MetricCorrelation(Base):
+    """Derived per-metric statistics used by StrategyAdapter."""
+
+    __tablename__ = "metric_correlations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    metric_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    times_cited: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    times_cited_in_winning_round: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    win_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    current_weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class StrategyAdaptation(Base):
+    """Auditable record of strategy weight adaptations performed by agents."""
+
+    __tablename__ = "strategy_adaptations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    adaptation_round: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_weights_json: Mapped[str] = mapped_column(Text, nullable=False)
+    new_weights_json: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)

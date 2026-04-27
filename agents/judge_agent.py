@@ -37,6 +37,8 @@ from utils.db_manager import (
     upsert_round_comparison_from_judge,
 )
 from utils.market_data import MarketSnapshot, fetch_snapshot
+from utils.db.schema import ArgumentPerformance
+import statistics
 
 # Judge architecture map (must be explicit before implementation):
 # 1) Bidirectional messaging role:
@@ -434,10 +436,36 @@ def score_round(
 ) -> dict[str, Any]:
     """Score one debate round, apply accuracy bonus, and return normalized verdict dict."""
     accuracy_bonus_result = calculate_accuracy_bonus(round_number, market_snapshot)
+    # Add brief historical performance context (averages over last 3 rounds) but instruct the Judge not to bias.
+    session_id = os.getenv("DEBATE_SESSION_ID", "default-session")
+    def _avg_score_for(side: str) -> float | None:
+        with get_session() as session:
+            rows = (
+                session.query(ArgumentPerformance)
+                .filter(ArgumentPerformance.session_id == session_id)
+                .filter(ArgumentPerformance.agent == side)
+                .order_by(ArgumentPerformance.round_number.desc())
+                .limit(3)
+                .all()
+            )
+            scores = [float(r.judge_score_received) for r in rows if r.judge_score_received is not None]
+            if not scores:
+                return None
+            return float(statistics.mean(scores))
+
+    bull_avg = _avg_score_for("bull")
+    bear_avg = _avg_score_for("bear")
+
+    context_note = (
+        f"Context: Bull's average score over last 3 rounds was {bull_avg if bull_avg is not None else 'N/A'}. "
+        f"Bear's average score was {bear_avg if bear_avg is not None else 'N/A'}. "
+        "Do not let historical performance bias your scoring of this round's arguments — score only on the quality of evidence presented this round."
+    )
+
     invoke_payload = {
         "bull_argument": json.dumps(bull_argument_dict, default=str),
         "bear_argument": json.dumps(bear_argument_dict, default=str),
-        "market_data": _market_snapshot_to_text(market_snapshot),
+        "market_data": f"{context_note}\n\n{_market_snapshot_to_text(market_snapshot)}",
         "format_instructions": _init_parser.get_format_instructions(),
     }
 

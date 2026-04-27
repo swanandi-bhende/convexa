@@ -28,6 +28,12 @@ from utils.constants import (
     resolve_token_address,
     resolve_token_decimals,
 )
+from keeper.execution_handler import (
+    FINAL_SETTLEMENT_RETRY_POLICY,
+    MICRO_SETTLEMENT_RETRY_POLICY,
+    submit_job,
+    execute_swap_via_keeperhub,
+)
 from utils.db.schema import SwapExecution, SwapQuote, SwapWarning
 from utils.db_manager import get_session, init_database, upsert_round_trace
 
@@ -147,6 +153,7 @@ class SettlementResult:
     success: bool
     reason: str | None
     tx_hash: str | None
+    keeperhub_job_id: str | None
     amount_out_actual_wei: str | None
 
 
@@ -1137,7 +1144,7 @@ def execute_micro_settlement(
             micro_settlement_tx_hash=f"skipped:{exc}",
             timestamp=_now_utc_naive(),
         )
-        return SettlementResult(False, str(exc), None, None)
+        return SettlementResult(False, str(exc), None, None, None)
 
     try:
         escrow_contract = _load_debate_escrow_contract()
@@ -1149,7 +1156,7 @@ def execute_micro_settlement(
             micro_settlement_tx_hash=f"skipped:stake_info_failed:{exc}",
             timestamp=_now_utc_naive(),
         )
-        return SettlementResult(False, f"stake_info_failed:{exc}", None, None)
+        return SettlementResult(False, f"stake_info_failed:{exc}", None, None, None)
 
     losing_total = int(bear_total if losing_side.strip().lower() == "bear" else bull_total)
     amount_in_wei = int(losing_total * (MICRO_SETTLEMENT_PERCENT / 100.0))
@@ -1161,7 +1168,7 @@ def execute_micro_settlement(
             micro_settlement_tx_hash=f"skipped:{reason}",
             timestamp=_now_utc_naive(),
         )
-        return SettlementResult(False, reason, None, None)
+        return SettlementResult(False, reason, None, None, None)
 
     token_in_threshold = _eth_threshold_to_base_units(token_in_symbol, MICRO_SETTLEMENT_MIN_ETH_EQUIVALENT)
     if amount_in_wei < token_in_threshold:
@@ -1172,7 +1179,7 @@ def execute_micro_settlement(
             micro_settlement_tx_hash=f"skipped:{reason}",
             timestamp=_now_utc_naive(),
         )
-        return SettlementResult(False, reason, None, None)
+        return SettlementResult(False, reason, None, None, None)
 
     quote = fetch_quote(
         token_in=token_in_symbol,
@@ -1189,7 +1196,7 @@ def execute_micro_settlement(
             micro_settlement_tx_hash=f"skipped:quote_failed:{quote.reason}",
             timestamp=_now_utc_naive(),
         )
-        return SettlementResult(False, quote.reason, None, None)
+        return SettlementResult(False, quote.reason, None, None, None)
 
     swap_calldata = build_swap_calldata(quote)
     if not swap_calldata.success:
@@ -1199,43 +1206,35 @@ def execute_micro_settlement(
             micro_settlement_tx_hash=f"skipped:swap_build_failed:{swap_calldata.reason}",
             timestamp=_now_utc_naive(),
         )
-        return SettlementResult(False, swap_calldata.reason, None, None)
+        return SettlementResult(False, swap_calldata.reason, None, None, None)
 
-    broadcast = broadcast_and_confirm(
-        swap_calldata=swap_calldata,
-        session_id=session_id,
-        round_number=round_number,
-        swap_type="micro_settlement",
-    )
-    if not broadcast.tx_hash:
+    # Route through KeeperHub or fall back to direct submit depending on flag
+    USE_KEEPERHUB = os.getenv("USE_KEEPERHUB", "true").strip().lower() in {"1", "true", "yes"}
+    if not USE_KEEPERHUB:
+        # Build SwapCalldata is identical; call existing broadcast path
+        broadcast = broadcast_and_confirm(swap_calldata, session_id, round_number, "micro_settlement")
+        analysis = analyze_execution(quote, broadcast.tx_receipt, session_id, round_number)
+        return SettlementResult(broadcast.success, broadcast.reason, broadcast.tx_hash, None, analysis.amount_out_actual_wei)
+
+    # Use KeeperHub unified executor
+    result = execute_swap_via_keeperhub(session_id, round_number, "micro_settlement", quote)
+    if not result.get("success"):
         upsert_round_trace(
             session_id=session_id,
             round_number=round_number,
-            micro_settlement_tx_hash=f"failed:{broadcast.reason}",
+            micro_settlement_tx_hash=f"failed:keeperhub:{result.get('reason')}",
             timestamp=_now_utc_naive(),
         )
-        return SettlementResult(False, broadcast.reason, None, None)
-
-    analysis = analyze_execution(
-        quote_result=quote,
-        tx_receipt=broadcast.tx_receipt,
-        session_id=session_id,
-        round_number=round_number,
-    )
+        return SettlementResult(False, result.get("reason"), None, None, None)
 
     upsert_round_trace(
         session_id=session_id,
         round_number=round_number,
-        micro_settlement_tx_hash=broadcast.tx_hash,
+        micro_settlement_tx_hash=f"keeperhub_job:{result.get('job_id')}",
         timestamp=_now_utc_naive(),
     )
 
-    return SettlementResult(
-        success=broadcast.success,
-        reason=broadcast.reason if not broadcast.success else analysis.reason,
-        tx_hash=broadcast.tx_hash,
-        amount_out_actual_wei=analysis.amount_out_actual_wei,
-    )
+    return SettlementResult(True, "confirmed", result.get("tx_hash"), result.get("job_id"), None)
 
 
 def execute_final_settlement(session_id: str, winning_side: str) -> dict[str, Any]:
@@ -1261,6 +1260,7 @@ def execute_final_settlement(session_id: str, winning_side: str) -> dict[str, An
         tranche_amounts = [total_losing_wei]
 
     tranche_hashes: list[str] = []
+    tranche_job_ids: list[str] = []
     tranche_in: list[int] = []
     tranche_out: list[int] = []
     tranche_gas_used: list[int] = []
@@ -1291,34 +1291,73 @@ def execute_final_settlement(session_id: str, winning_side: str) -> dict[str, An
                 "tx_hashes": tranche_hashes,
             }
 
-        broadcast = broadcast_and_confirm(
-            swap_calldata=swap_calldata,
-            session_id=session_id,
-            round_number=round_number,
-            swap_type="final_settlement",
-        )
-        if not broadcast.tx_hash:
-            return {
-                "success": False,
-                "reason": f"final_broadcast_failed_tranche_{idx + 1}:{broadcast.reason}",
-                "tx_hashes": tranche_hashes,
-            }
+        # Use unified keeperhub executor when enabled
+        USE_KEEPERHUB = os.getenv("USE_KEEPERHUB", "true").strip().lower() in {"1", "true", "yes"}
+        if not USE_KEEPERHUB:
+            try:
+                job_id = submit_job(
+                    session_id=session_id,
+                    round_number=round_number,
+                    job_type="final_settlement",
+                    swap_calldata_obj=swap_calldata,
+                    retry_policy=FINAL_SETTLEMENT_RETRY_POLICY,
+                )
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "reason": f"final_keeperhub_submit_failed_tranche_{idx + 1}:{exc}",
+                    "tx_hashes": tranche_hashes,
+                    "job_ids": tranche_job_ids,
+                }
 
-        analysis = analyze_execution(
-            quote_result=quote,
-            tx_receipt=broadcast.tx_receipt,
-            session_id=session_id,
-            round_number=round_number,
-        )
+            execution_id = _insert_execution_row(
+                session_id=session_id,
+                round_number=round_number,
+                swap_type="final_settlement",
+                quote_id=swap_calldata.quote_id,
+                tx_hash=None,
+                token_in=quote.token_in,
+                token_out=quote.token_out,
+                amount_in_actual_wei=quote.amount_in_wei,
+                status="pending",
+                gas_price_gwei=None,
+                error_message="submitted_to_keeperhub",
+            )
+            _update_execution_row(execution_id, keeperhub_job_id=job_id)
 
-        tranche_hashes.append(broadcast.tx_hash)
-        tranche_in.append(int(tranche))
-        tranche_out.append(int(analysis.amount_out_actual_wei or 0))
+            tranche_hashes.append(f"keeperhub_job:{job_id}")
+            tranche_job_ids.append(job_id)
+            tranche_in.append(int(tranche))
+            tranche_out.append(0)
+            tranche_gas_used.append(0)
+        else:
+            result = execute_swap_via_keeperhub(session_id, round_number, "final_settlement", quote)
+            if not result.get("success"):
+                return {
+                    "success": False,
+                    "reason": f"final_keeperhub_failed_tranche_{idx + 1}:{result.get('reason')}",
+                    "tx_hashes": tranche_hashes,
+                    "job_ids": tranche_job_ids,
+                }
 
-        gas_used = 0
-        if broadcast.tx_receipt is not None:
-            gas_used = int((broadcast.tx_receipt or {}).get("gasUsed", 0))
-        tranche_gas_used.append(gas_used)
+            execution_id = _insert_execution_row(
+                session_id=session_id,
+                round_number=round_number,
+                swap_type="final_settlement",
+                quote_id=swap_calldata.quote_id,
+                tx_hash=result.get("tx_hash"),
+                token_in=quote.token_in,
+                token_out=quote.token_out,
+                amount_in_actual_wei=quote.amount_in_wei,
+                status="confirmed",
+                gas_price_gwei=None,
+                error_message=None,
+            )
+            tranche_hashes.append(result.get("tx_hash") or f"keeperhub_job:{result.get('job_id')}")
+            tranche_job_ids.append(result.get("job_id"))
+            tranche_in.append(int(tranche))
+            tranche_out.append(int(result.get("analysis").amount_out_actual_wei) if result.get("analysis") and hasattr(result.get("analysis"), "amount_out_actual_wei") else 0)
+            tranche_gas_used.append(0)
 
         if idx < len(tranche_amounts) - 1:
             if DRY_RUN:
@@ -1377,6 +1416,7 @@ def execute_final_settlement(session_id: str, winning_side: str) -> dict[str, An
         "success": True,
         "settlement_tx_hash": settle_tx_hash,
         "tranche_tx_hashes": tranche_hashes,
+        "tranche_job_ids": tranche_job_ids,
         "total_amount_in_wei": str(total_in),
         "total_amount_out_wei": str(total_out),
         "weighted_execution_price": weighted_execution_price,

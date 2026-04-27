@@ -32,6 +32,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.db_manager import init_database, insert_bull_round, upsert_round_comparison_from_bull
 from utils.market_data import MarketSnapshot, fetch_snapshot, format_for_bull
+from agents.memory import AgentMemory, PerformanceTracker
+from agents.strategy_adapter import StrategyAdapter
 
 
 class BullAgentOutput(BaseModel):
@@ -183,9 +185,18 @@ def _apply_bull_confidence_cap(argument_dict: dict[str, Any], snapshot: MarketSn
     return capped
 
 
-def generate_bull_argument(market_snapshot: MarketSnapshot, round_number: int) -> dict[str, Any]:
+def generate_bull_argument(market_snapshot: MarketSnapshot, round_number: int, memory: AgentMemory | None = None, weights: dict | None = None) -> dict[str, Any]:
     """Generate a validated bullish argument for one round with robust fallback behavior."""
-    market_summary = format_for_bull(market_snapshot)
+    market_summary = format_for_bull(market_snapshot, weights=weights)
+
+    # Inject recent memory context if available
+    if memory is not None:
+        try:
+            mem_block = memory.memory.load_memory_variables({}).get("debate_history", "")
+            if mem_block:
+                market_summary = f"Recent debate history:\n{mem_block}\n\n{market_summary}"
+        except Exception:
+            pass
 
     try:
         response = BULL_CHAIN.invoke(
@@ -259,6 +270,19 @@ def run_bull_round(round_number: int, token_pair: str) -> dict[str, Any]:
     """Execute one complete Bull round: fetch, reason, publish, log, and summarize."""
     init_database()
 
+    session_id = os.getenv("DEBATE_SESSION_ID", "default-session")
+    performance_tracker = PerformanceTracker()
+    strategy_adapter = StrategyAdapter("bull", session_id, performance_tracker)
+    memory = AgentMemory("bull", session_id)
+
+    # Possibly adapt strategy weights
+    try:
+        strategy_adapter.apply_adaptation(round_number)
+    except Exception:
+        pass
+
+    weights = strategy_adapter.get_current_weights()
+
     snapshot: MarketSnapshot | None = None
     market_fetch_error: str | None = None
     try:
@@ -274,7 +298,7 @@ def run_bull_round(round_number: int, token_pair: str) -> dict[str, Any]:
             fetch_errors=[market_fetch_error or "unknown fetch failure"],
         )
 
-    argument_dict = generate_bull_argument(snapshot, round_number)
+    argument_dict = generate_bull_argument(snapshot, round_number, memory=memory, weights=weights)
     axl_sent = publish_to_judge(argument_dict, round_number)
     axl_status = "sent" if axl_sent else "failed"
 
@@ -299,6 +323,24 @@ def run_bull_round(round_number: int, token_pair: str) -> dict[str, Any]:
         bull_confidence=int(argument_dict.get("confidence", 0)),
         bull_axl_status=axl_status,
     )
+
+    # If a judge score was provided via environment or orchestrator callback, record it
+    judge_score_env = os.getenv("LATEST_JUDGE_SCORE_BULL")
+    try:
+        judge_score = int(judge_score_env) if judge_score_env is not None else None
+    except Exception:
+        judge_score = None
+
+    if judge_score is not None:
+        try:
+            memory.add_round(round_number, market_summary if 'market_summary' in locals() else format_for_bull(snapshot, weights=weights), argument_dict, judge_score)
+        except Exception:
+            pass
+        try:
+            performance_tracker.record_round(session_id, "bull", round_number, argument_dict, judge_score, won_round=(int(argument_dict.get("confidence",0))>50), accuracy_bonus=False)
+            performance_tracker.update_metric_correlations(session_id, "bull", round_number)
+        except Exception:
+            pass
 
     argument_preview = str(argument_dict.get("argument", ""))[:90]
     print(

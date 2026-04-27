@@ -22,6 +22,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from agents.bear_agent import run_bear_round
 from agents.bull_agent import run_bull_round
 from agents.judge_agent import run_judge_round
+from agents.memory import AgentMemory, PerformanceTracker
+from agents.strategy_adapter import StrategyAdapter
+from keeper import execution_handler
 from keeper import keeper_handler
 from utils.db_manager import (
     get_debate_session_by_session_id,
@@ -33,6 +36,10 @@ from utils.db_manager import (
 from utils.market_data import fetch_snapshot
 
 load_dotenv()
+
+# Safe mode prevents any real onchain transactions or RPC-dependent actions.
+# Set ORCHESTRATOR_SAFE_MODE=1 in env to enable.
+SAFE_MODE = os.getenv("ORCHESTRATOR_SAFE_MODE", "0") == "1"
 
 
 STATE_IDLE = "IDLE"
@@ -132,6 +139,10 @@ def _load_abi(abi_path: Path) -> list[dict[str, Any]]:
 
 
 def _get_web3_and_conviction_contract() -> tuple[Web3, Any]:
+    if SAFE_MODE:
+        # In safe mode, return dummy placeholders; callers should handle None appropriately.
+        return None, None
+
     rpc_url = os.getenv("ALCHEMY_RPC_URL") or os.getenv("MARKET_DATA_RPC_URL")
     conviction_address = os.getenv("CONVICTION_CONTRACT_ADDRESS")
     if not rpc_url or not conviction_address:
@@ -150,6 +161,10 @@ def _get_web3_and_conviction_contract() -> tuple[Web3, Any]:
 
 
 def _read_onchain_scores() -> tuple[int, int]:
+    if SAFE_MODE:
+        # Return simulated neutral scores in safe mode
+        return 0, 0
+
     _web3, conviction_contract = _get_web3_and_conviction_contract()
     bull_score = int(conviction_contract.functions.currentBullScore().call())
     bear_score = int(conviction_contract.functions.currentBearScore().call())
@@ -194,6 +209,9 @@ def _send_contract_tx(
     contract_function: Any,
     gas_limit_env_var: str,
 ) -> str:
+    if SAFE_MODE:
+        return "simulated-tx-hash"
+
     chain_id = int(web3.eth.chain_id)
     if os.getenv("BLOCK_REAL_MONEY_TRANSACTIONS", "1") == "1":
         allowed_raw = os.getenv("TX_ALLOWED_CHAIN_IDS", "1301,11155111,84532,421614")
@@ -253,6 +271,11 @@ def _ping_axl_node(base_url: str) -> tuple[bool, str]:
 def initialize_debate_session(token_pair: str, max_rounds: int, round_interval_seconds: int) -> str:
     """Create an orchestrator session and start both onchain debate contracts."""
     init_database()
+
+    try:
+        execution_handler.test_connection()
+    except Exception as exc:
+        raise RuntimeError(f"KeeperHub startup connectivity check failed: {exc}") from exc
 
     session_id = str(uuid4())
     start_time = _utcnow()
@@ -499,6 +522,55 @@ def run_judging(
 
     verdict = run_judge_round(round_number, token_pair)
 
+    # Persist memory and performance for both agents so learning data is available.
+    try:
+        perf = PerformanceTracker()
+        bull_arg = bull_argument if isinstance(bull_argument, dict) else {}
+        bear_arg = bear_argument if isinstance(bear_argument, dict) else {}
+
+        bull_score = int(verdict.get("bullScore", 0))
+        bear_score = int(verdict.get("bearScore", 0))
+        winner = str(verdict.get("winner") or "").lower()
+
+        bull_memory = AgentMemory("bull", session_id)
+        bear_memory = AgentMemory("bear", session_id)
+
+        # Prepare a safe market snapshot string
+        try:
+            import json as _json
+            if isinstance(market_snapshot, str):
+                ms_text = market_snapshot
+            else:
+                ms_text = _json.dumps(market_snapshot, default=str)
+        except Exception:
+            ms_text = str(market_snapshot)
+
+        # Add rounds to conversational memory and persist snapshots
+        try:
+            bull_memory.add_round(round_number, ms_text, bull_arg, bull_score)
+            bull_memory.save_snapshot(round_number)
+        except Exception:
+            pass
+        try:
+            bear_memory.add_round(round_number, ms_text, bear_arg, bear_score)
+            bear_memory.save_snapshot(round_number)
+        except Exception:
+            pass
+
+        # Record performance and update metric correlations
+        try:
+            perf.record_round(session_id, "bull", round_number, bull_arg, bull_score, won_round=(winner == "bull"), accuracy_bonus=bool(verdict.get("accuracyBonusApplied", False)))
+            perf.update_metric_correlations(session_id, "bull")
+        except Exception:
+            pass
+        try:
+            perf.record_round(session_id, "bear", round_number, bear_arg, bear_score, won_round=(winner == "bear"), accuracy_bonus=bool(verdict.get("accuracyBonusApplied", False)))
+            perf.update_metric_correlations(session_id, "bear")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     bull_score, bear_score = _read_onchain_scores()
 
     upsert_round_trace(
@@ -542,8 +614,11 @@ def check_end_conditions(
         winner = "draw"
         end_reason = "max_rounds_reached"
     else:
-        _web3, conviction_contract = _get_web3_and_conviction_contract()
-        contract_settlement_triggered = bool(conviction_contract.functions.isSettlementTriggered().call())
+        if SAFE_MODE:
+            contract_settlement_triggered = False
+        else:
+            _web3, conviction_contract = _get_web3_and_conviction_contract()
+            contract_settlement_triggered = bool(conviction_contract.functions.isSettlementTriggered().call())
         if contract_settlement_triggered:
             winner = _read_contract_declared_winner() or "draw"
             end_reason = "contract_settlement_triggered"
@@ -612,6 +687,11 @@ def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) ->
     session_id = initialize_debate_session(token_pair, max_rounds, round_interval_seconds)
     winning_side: str | None = None
 
+    # Prepare strategy adapters so orchestrator can trigger adaptations
+    perf_tracker = PerformanceTracker()
+    bull_adapter = StrategyAdapter("bull", session_id, perf_tracker)
+    bear_adapter = StrategyAdapter("bear", session_id, perf_tracker)
+
     try:
         for round_number in range(1, max_rounds + 1):
             round_start_time = time.time()
@@ -635,6 +715,16 @@ def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) ->
                 bear_argument,
                 snapshot,
             )
+
+            # After judge verdict and performance persistence, allow StrategyAdapter to adapt.
+            try:
+                bull_adapter.apply_adaptation(round_number)
+            except Exception:
+                pass
+            try:
+                bear_adapter.apply_adaptation(round_number)
+            except Exception:
+                pass
 
             end_state = check_end_conditions(
                 session_id=session_id,

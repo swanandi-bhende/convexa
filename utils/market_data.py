@@ -749,34 +749,72 @@ def _metric_lines(snapshot: MarketSnapshot) -> list[str]:
     ]
 
 
-def format_for_bear(snapshot: MarketSnapshot) -> str:
+def format_for_bear(snapshot: MarketSnapshot, weights: dict[str, float] | None = None) -> str:
     lines = _metric_lines(snapshot)
-    lead: list[str] = []
-    if snapshot.price_change_24h_percent < 0:
-        lead.append(lines[0])
-    if snapshot.large_outflow_count > snapshot.large_inflow_count:
-        lead.append(lines[16])
-    if snapshot.lp_net_flow_usd < 0:
-        lead.append(lines[13])
+    weights = weights or {}
 
-    ordered = lead + [line for line in lines if line not in lead]
-    return f"Bear view for {snapshot.token_pair}. Most bearish first: {' | '.join(ordered[:3])}. Complete metrics: {' ; '.join(ordered)}."
+    # Map metric name (before colon) to line
+    metric_map: list[tuple[str, str, float]] = []
+    for line in lines:
+        name = line.split(":", 1)[0].strip()
+        w = float(weights.get(name, 1.0))
+        metric_map.append((name, line, w))
+
+    # Sort by weight desc
+    metric_map.sort(key=lambda t: t[2], reverse=True)
+
+    key_lines = []
+    normal_lines = []
+    weak_lines = []
+    for name, line, w in metric_map:
+        if w > 1.5:
+            key_lines.append(f"[KEY SIGNAL] {line}")
+        elif w < 0.5:
+            weak_lines.append(line)
+        else:
+            normal_lines.append(line)
+
+    ordered = key_lines + normal_lines
+    top3 = ordered[:3]
+    result_parts = []
+    result_parts.append(f"Bear view for {snapshot.token_pair}. Most bearish first: {' | '.join(top3)}.")
+    result_parts.append(f"Complete metrics: {' ; '.join(ordered + weak_lines)}.")
+    if weak_lines:
+        result_parts.append(f"[WEAK SIGNAL] { ' ; '.join(weak_lines)}")
+    return " ".join(result_parts)
 
 
-def format_for_bull(snapshot: MarketSnapshot) -> str:
+def format_for_bull(snapshot: MarketSnapshot, weights: dict[str, float] | None = None) -> str:
     lines = _metric_lines(snapshot)
-    lead: list[str] = []
-    if snapshot.price_change_24h_percent > 0:
-        lead.append(lines[0])
-    if snapshot.large_inflow_count >= snapshot.large_outflow_count:
-        lead.append(lines[14])
-    if snapshot.recent_lp_additions_usd >= snapshot.recent_lp_removals_usd:
-        lead.append(lines[11])
-    if snapshot.lp_net_flow_usd > 0:
-        lead.append(lines[13])
+    weights = weights or {}
 
-    ordered = lead + [line for line in lines if line not in lead]
-    return f"Bull view for {snapshot.token_pair}. Most accumulation first: {' | '.join(ordered[:3])}. Complete metrics: {' ; '.join(ordered)}."
+    metric_map: list[tuple[str, str, float]] = []
+    for line in lines:
+        name = line.split(":", 1)[0].strip()
+        w = float(weights.get(name, 1.0))
+        metric_map.append((name, line, w))
+
+    metric_map.sort(key=lambda t: t[2], reverse=True)
+
+    key_lines = []
+    normal_lines = []
+    weak_lines = []
+    for name, line, w in metric_map:
+        if w > 1.5:
+            key_lines.append(f"[KEY SIGNAL] {line}")
+        elif w < 0.5:
+            weak_lines.append(line)
+        else:
+            normal_lines.append(line)
+
+    ordered = key_lines + normal_lines
+    top3 = ordered[:3]
+    result_parts = []
+    result_parts.append(f"Bull view for {snapshot.token_pair}. Most accumulation first: {' | '.join(top3)}.")
+    result_parts.append(f"Complete metrics: {' ; '.join(ordered + weak_lines)}.")
+    if weak_lines:
+        result_parts.append(f"[WEAK SIGNAL] { ' ; '.join(weak_lines)}")
+    return " ".join(result_parts)
 
 
 def _print_snapshot_fields(snapshot: MarketSnapshot) -> None:

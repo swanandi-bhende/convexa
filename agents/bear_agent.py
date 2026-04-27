@@ -23,6 +23,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.db_manager import init_database, insert_bear_round
 from utils.market_data import MarketSnapshot, fetch_snapshot, format_for_bear
+from agents.memory import AgentMemory, PerformanceTracker
+from agents.strategy_adapter import StrategyAdapter
 
 
 SYSTEM_PROMPT = (
@@ -170,9 +172,18 @@ def _post_process_argument(payload: dict[str, Any], snapshot: MarketSnapshot) ->
     }
 
 
-def generate_bear_argument(market_snapshot: MarketSnapshot, round_number: int) -> dict[str, Any]:
+def generate_bear_argument(market_snapshot: MarketSnapshot, round_number: int, memory: AgentMemory | None = None, weights: dict | None = None) -> dict[str, Any]:
     """Generate a validated bearish argument for one round with robust fallback behavior."""
-    market_summary = format_for_bear(market_snapshot)
+    market_summary = format_for_bear(market_snapshot, weights=weights)
+
+    # Inject recent memory context if available
+    if memory is not None:
+        try:
+            mem_block = memory.memory.load_memory_variables({}).get("debate_history", "")
+            if mem_block:
+                market_summary = f"Recent debate history:\n{mem_block}\n\n{market_summary}"
+        except Exception:
+            pass
 
     try:
         response = BEAR_CHAIN.invoke(
@@ -228,6 +239,18 @@ def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
     """Execute one complete Bear round: fetch, reason, publish, log, and summarize."""
     init_database()
 
+    session_id = os.getenv("DEBATE_SESSION_ID", "default-session")
+    performance_tracker = PerformanceTracker()
+    strategy_adapter = StrategyAdapter("bear", session_id, performance_tracker)
+    memory = AgentMemory("bear", session_id)
+
+    try:
+        strategy_adapter.apply_adaptation(round_number)
+    except Exception:
+        pass
+
+    weights = strategy_adapter.get_current_weights()
+
     snapshot: MarketSnapshot | None = None
     market_fetch_error: str | None = None
     try:
@@ -243,7 +266,7 @@ def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
             fetch_errors=[market_fetch_error or "unknown fetch failure"],
         )
 
-    argument_dict = generate_bear_argument(snapshot, round_number)
+    argument_dict = generate_bear_argument(snapshot, round_number, memory=memory, weights=weights)
     axl_sent = publish_to_judge(argument_dict, round_number)
     axl_status = "sent" if axl_sent else "failed"
 
@@ -270,6 +293,24 @@ def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
         f"AXL: {axl_status} | "
         f"Argument: {argument_preview}"
     )
+
+    # If a judge score was provided via environment or orchestrator callback, record it
+    judge_score_env = os.getenv("LATEST_JUDGE_SCORE_BEAR")
+    try:
+        judge_score = int(judge_score_env) if judge_score_env is not None else None
+    except Exception:
+        judge_score = None
+
+    if judge_score is not None:
+        try:
+            memory.add_round(round_number, market_summary if 'market_summary' in locals() else format_for_bear(snapshot, weights=weights), argument_dict, judge_score)
+        except Exception:
+            pass
+        try:
+            performance_tracker.record_round(session_id, "bear", round_number, argument_dict, judge_score, won_round=(int(argument_dict.get("confidence",0))>50), accuracy_bonus=False)
+            performance_tracker.update_metric_correlations(session_id, "bear", round_number)
+        except Exception:
+            pass
 
     return {
         "round_number": round_number,

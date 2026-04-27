@@ -77,3 +77,38 @@ def get_universal_router_address(chain_id: int | None = None) -> str:
 def resolve_token_decimals(token: str) -> int:
     """Resolve decimals by symbol with conservative default for unknown symbols."""
     return TOKEN_DECIMALS_BY_SYMBOL.get(token.upper(), 18)
+
+
+# AXL Node Identities: peer IDs and public keys for message validation
+# These are loaded from environment with fallback defaults for testing/demo
+AXL_NODE_PEER_IDS: dict[str, str] = {
+    "bull": os.getenv(
+        "BULL_AXL_PEER_ID",
+        "12D3KooWFTiF7mMa1KKQPhYdQEVKSTPAWKfyJ6jCL5Dkr5f4oNL8"  # Demo default
+    ),
+    "bear": os.getenv(
+        "BEAR_AXL_PEER_ID",
+        "12D3KooWFTiF7mMa1KKQPhYdQEVKSTPAWKfyJ6jCL5Dkr5f4oNL9"  # Demo default
+    ),
+    "judge": os.getenv(
+        "JUDGE_AXL_PEER_ID",
+        "12D3KooWFTiF7mMa1KKQPhYdQEVKSTPAWKfyJ6jCL5Dkr5f4oNL7"  # Demo default
+    ),
+}
+
+# AXL Node Public Keys: used for cryptographic signature validation
+# In production, these should be loaded from a secure configuration or service
+AXL_NODE_PUBLIC_KEYS: dict[str, str] = {
+    "bull": os.getenv(
+        "BULL_AXL_PUBLIC_KEY",
+        ""  # Should be set in production
+    ),
+    "bear": os.getenv(
+        "BEAR_AXL_PUBLIC_KEY",
+        ""  # Should be set in production
+    ),
+    "judge": os.getenv(
+        "JUDGE_AXL_PUBLIC_KEY",
+        ""  # Should be set in production
+    ),
+}

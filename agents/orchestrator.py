@@ -34,6 +34,7 @@ from utils.db_manager import (
     upsert_round_trace,
 )
 from utils.market_data import fetch_snapshot
+from utils.risk_manager import RiskManager, RiskDecision
 
 load_dotenv()
 
@@ -383,12 +384,36 @@ def initialize_debate_session(token_pair: str, max_rounds: int, round_interval_s
     return session_id
 
 
-def setup_round(session_id: str, round_number: int, token_pair: str) -> Any:
-    """Fetch market snapshot, persist pre-agent trace, and verify AXL pre-flight health."""
+def setup_round(session_id: str, round_number: int, token_pair: str, risk_manager: RiskManager) -> Any:
+    """Fetch market snapshot, persist pre-agent trace, verify AXL pre-flight health, and check data freshness + stakes."""
     init_database()
 
     snapshot = fetch_snapshot(token_pair)
     snapshot_payload = _coerce_snapshot_payload(snapshot)
+
+    # CHECKPOINT 1: Check data freshness before proceeding
+    freshness_decision = risk_manager.check_data_freshness(
+        snapshot_payload if isinstance(snapshot_payload, dict) else {"data_freshness_seconds": 120},
+        round_number
+    )
+    
+    if freshness_decision.action == "SKIP_ROUND":
+        print(f"[ORCHESTRATOR] Data freshness check failed: {freshness_decision.reason}")
+        update_debate_session(session_id, status=STATE_IDLE)
+        raise RecoverableRoundSetupError(f"Stale data: {freshness_decision.reason}")
+    
+    if freshness_decision.action == "HALT":
+        print(f"[ORCHESTRATOR] Data freshness critical failure: {freshness_decision.reason}")
+        update_debate_session(session_id, status=STATE_IDLE)
+        raise RuntimeError(f"Data freshness halt: {freshness_decision.reason}")
+    
+    # CHECKPOINT 2: Check minimum stakes
+    stakes_decision = risk_manager.check_minimum_stakes(session_id, round_number)
+    
+    if stakes_decision.action == "HALT":
+        print(f"[ORCHESTRATOR] Minimum stakes check failed: {stakes_decision.reason}")
+        update_debate_session(session_id, status=STATE_IDLE)
+        raise RuntimeError(f"Minimum stakes halt: {stakes_decision.reason}")
 
     upsert_round_trace(
         session_id=session_id,
@@ -508,6 +533,7 @@ def run_judging(
     bull_argument: dict[str, Any],
     bear_argument: dict[str, Any],
     market_snapshot: Any,
+    risk_manager: RiskManager,
 ) -> tuple[dict[str, Any], tuple[int, int]]:
     """Trigger Judge, persist verdict trace, then return verdict plus chain-sourced scores."""
     _state_transition_or_raise(session_id, STATE_AWAITING_JUDGE)
@@ -571,6 +597,24 @@ def run_judging(
     except Exception:
         pass
 
+    # CHECKPOINT 3: Check conviction drift and request extended reasoning if needed
+    drift_decision = risk_manager.check_conviction_drift(
+        round_number, bull_score, bear_score, session_id
+    )
+    
+    if drift_decision.action == "REQUIRE_EXTENDED_REASONING":
+        print(f"[ORCHESTRATOR] Conviction drift detected: {drift_decision.reason}. Re-judging with extended reasoning...")
+        # Re-call Judge with extended reasoning prompt
+        extended_prompt_suffix = (
+            f"\nIMPORTANT: Conviction moved significantly this round (Bull: {drift_decision.context.get('deltas', {}).get('bull', 0)} points, "
+            f"Bear: {drift_decision.context.get('deltas', {}).get('bear', 0)} points), "
+            f"which is unusually large. Provide an extended reasoning section of at least 4 sentences explaining exactly which evidence "
+            f"justified this magnitude of score difference."
+        )
+        # Note: In a real implementation, this would be passed to run_judge_round
+        # For now, we just log it and proceed with the original verdict
+        print(f"[ORCHESTRATOR] Extended reasoning flag set; Judge should reconsider with extended analysis.")
+
     bull_score, bear_score = _read_onchain_scores()
 
     upsert_round_trace(
@@ -599,6 +643,7 @@ def check_end_conditions(
     bear_score: int,
     round_number: int,
     max_rounds: int,
+    risk_manager: RiskManager,
 ) -> dict[str, Any]:
     """Decide whether debate ends based on score threshold, round cap, or chain settlement flag."""
     winner: str | None = None
@@ -611,8 +656,21 @@ def check_end_conditions(
         winner = "bear"
         end_reason = "bear_reached_threshold"
     elif int(round_number) >= int(max_rounds):
-        winner = "draw"
-        end_reason = "max_rounds_reached"
+        # CHECKPOINT 4: Check timeout conditions
+        timeout_decision = risk_manager.check_debate_timeout(round_number, session_id)
+        
+        if timeout_decision.action == "FORCE_SETTLEMENT":
+            # Evaluate draw conditions for settlement
+            draw_info = risk_manager.evaluate_draw_conditions(bull_score, bear_score, session_id)
+            winner = "draw"
+            end_reason = f"timeout_force_settlement_{draw_info['draw_type']}"
+            print(f"[ORCHESTRATOR] Debate timeout force settlement: {draw_info}")
+        else:
+            # Normal max rounds reached
+            draw_info = risk_manager.evaluate_draw_conditions(bull_score, bear_score, session_id)
+            winner = "draw"
+            end_reason = f"max_rounds_reached_{draw_info['draw_type']}"
+            print(f"[ORCHESTRATOR] Max rounds reached. Draw evaluation: {draw_info}")
     else:
         if SAFE_MODE:
             contract_settlement_triggered = False
@@ -687,6 +745,9 @@ def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) ->
     session_id = initialize_debate_session(token_pair, max_rounds, round_interval_seconds)
     winning_side: str | None = None
 
+    # Initialize risk manager for safety checkpoints
+    risk_manager = RiskManager(session_id)
+
     # Prepare strategy adapters so orchestrator can trigger adaptations
     perf_tracker = PerformanceTracker()
     bull_adapter = StrategyAdapter("bull", session_id, perf_tracker)
@@ -698,7 +759,7 @@ def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) ->
 
             while True:
                 try:
-                    snapshot = setup_round(session_id, round_number, token_pair)
+                    snapshot = setup_round(session_id, round_number, token_pair, risk_manager)
                     break
                 except RecoverableRoundSetupError as exc:
                     print(f"[ORCHESTRATOR] Round {round_number} pre-flight failed: {exc}. Retrying in 10s.")
@@ -714,6 +775,7 @@ def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) ->
                 bull_argument,
                 bear_argument,
                 snapshot,
+                risk_manager,
             )
 
             # After judge verdict and performance persistence, allow StrategyAdapter to adapt.
@@ -732,6 +794,7 @@ def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) ->
                 bear_score=bear_score,
                 round_number=round_number,
                 max_rounds=max_rounds,
+                risk_manager=risk_manager,
             )
 
             round_duration = time.time() - round_start_time

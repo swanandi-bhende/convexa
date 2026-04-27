@@ -260,6 +260,75 @@ class KeeperHubRetry(Base):
     retry_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
+class SafetyEvent(Base):
+    """Logs all risk management decisions and safety events during debate rounds."""
+
+    __tablename__ = "safety_events"
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('stale_data', 'conviction_drift', 'low_stake', 'debate_timeout', 'invalid_axl_signature', 'gas_spike', 'data_source_failure')",
+            name="ck_safety_events_event_type",
+        ),
+        CheckConstraint(
+            "severity IN ('warning', 'pause', 'halt')",
+            name="ck_safety_events_severity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    details_json: Mapped[str] = mapped_column(Text, nullable=False)
+    action_taken: Mapped[str] = mapped_column(String(128), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class ConvictionHistory(Base):
+    """Tracks conviction score movements across rounds to detect drift patterns."""
+
+    __tablename__ = "conviction_history"
+    __table_args__ = (
+        CheckConstraint("bull_score >= 0 AND bull_score <= 100", name="ck_conviction_history_bull_score"),
+        CheckConstraint("bear_score >= 0 AND bear_score <= 100", name="ck_conviction_history_bear_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    bull_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    bear_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    delta_from_previous_bull: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delta_from_previous_bear: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    drift_flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class AXLMessageAudit(Base):
+    """Audits all AXL messages received from Judge with validation status and acceptance."""
+
+    __tablename__ = "axl_message_audit"
+    __table_args__ = (
+        CheckConstraint(
+            "sender_claimed IN ('bull', 'bear')",
+            name="ck_axl_message_audit_sender_claimed",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    sender_claimed: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    sender_peer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    message_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    signature_present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    signature_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class AgentMemorySnapshot(Base):
     """Persistent serialized snapshots of an agent's LangChain memory."""
 
@@ -319,4 +388,15 @@ class StrategyAdaptation(Base):
     previous_weights_json: Mapped[str] = mapped_column(Text, nullable=False)
     new_weights_json: Mapped[str] = mapped_column(Text, nullable=False)
     reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class GasPriceHistory(Base):
+    """Rolling history of gas prices for spike detection and baseline calculation."""
+
+    __tablename__ = "gas_price_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    gas_price_gwei: Mapped[float] = mapped_column(Float, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)

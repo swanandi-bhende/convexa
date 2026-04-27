@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -139,3 +139,80 @@ class RoundTrace(Base):
     micro_settlement_tx_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
     round_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class SwapQuote(Base):
+    """Stores each quote request/response pair for micro and final settlement swaps."""
+
+    __tablename__ = "swap_quotes"
+    __table_args__ = (
+        CheckConstraint(
+            "swap_type IN ('micro_settlement', 'final_settlement')",
+            name="ck_swap_quotes_swap_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    swap_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    token_in: Mapped[str] = mapped_column(String(66), nullable=False)
+    token_out: Mapped[str] = mapped_column(String(66), nullable=False)
+    amount_in_wei: Mapped[str] = mapped_column(String(128), nullable=False)
+    quoted_amount_out_wei: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    quoted_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    route_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gas_estimate_wei: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    slippage_tolerance_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quote_timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    quote_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+
+
+class SwapExecution(Base):
+    """Stores transaction execution outcomes linked to previously fetched swap quotes."""
+
+    __tablename__ = "swap_executions"
+    __table_args__ = (
+        CheckConstraint(
+            "swap_type IN ('micro_settlement', 'final_settlement')",
+            name="ck_swap_executions_swap_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'failed', 'pending_timeout')",
+            name="ck_swap_executions_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    swap_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    quote_id: Mapped[int | None] = mapped_column(ForeignKey("swap_quotes.id"), nullable=True, index=True)
+    tx_hash: Mapped[str | None] = mapped_column(String(66), nullable=True, index=True)
+    token_in: Mapped[str] = mapped_column(String(66), nullable=False)
+    token_out: Mapped[str] = mapped_column(String(66), nullable=False)
+    amount_in_actual_wei: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    amount_out_actual_wei: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    execution_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    slippage_realized_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gas_used_wei: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    gas_price_gwei: Mapped[float | None] = mapped_column(Float, nullable=True)
+    keeperhub_job_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SwapWarning(Base):
+    """Stores anomalous execution warnings for post-trade analysis and reporting."""
+
+    __tablename__ = "swap_warnings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    warning_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    quote_id: Mapped[int | None] = mapped_column(ForeignKey("swap_quotes.id"), nullable=True, index=True)
+    execution_id: Mapped[int | None] = mapped_column(ForeignKey("swap_executions.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)

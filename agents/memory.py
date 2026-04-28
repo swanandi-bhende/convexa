@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Dict, List
 
 try:
@@ -163,13 +163,13 @@ class AgentMemory:
                     agent=self.agent_name,
                     round_number=round_number,
                     memory_json=memory_json,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 )
                 session.add(new_row)
             else:
                 existing.round_number = round_number
                 existing.memory_json = memory_json
-                existing.timestamp = datetime.utcnow()
+                existing.timestamp = datetime.now(UTC)
 
             session.commit()
 
@@ -206,7 +206,7 @@ class PerformanceTracker:
                 metrics_cited=json.dumps(parsed),
                 won_round=bool(won_round),
                 accuracy_bonus_received=bool(accuracy_bonus),
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
             session.add(row)
             session.commit()
@@ -309,13 +309,13 @@ class PerformanceTracker:
                         times_cited_in_winning_round=wins,
                         win_rate=win_rate,
                         current_weight=1.0,
-                        last_updated=datetime.utcnow(),
+                        last_updated=datetime.now(UTC),
                     )
                     session.add(existing)
                 else:
                     existing.times_cited = times
                     existing.times_cited_in_winning_round = wins
                     existing.win_rate = win_rate
-                    existing.last_updated = datetime.utcnow()
+                    existing.last_updated = datetime.now(UTC)
 
             session.commit()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import create_engine, desc, select
@@ -75,7 +75,7 @@ def insert_bear_round(
             key_metrics=json.dumps(key_metrics),
             raw_market_data=json.dumps(raw_market_data),
             axl_delivery_status=axl_delivery_status,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
         session.add(row)
         session.commit()
@@ -110,7 +110,7 @@ def insert_bull_round(
             key_metrics=json.dumps(key_metrics),
             raw_market_data=json.dumps(raw_market_data),
             axl_delivery_status=axl_delivery_status,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
         session.add(row)
         session.commit()
@@ -223,7 +223,7 @@ def insert_judge_verdict(
             accuracy_bonus_applied=accuracy_bonus_applied,
             accuracy_bonus_recipient=accuracy_bonus_recipient,
             conviction_update_status=conviction_update_status,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
         session.add(row)
         session.commit()
@@ -395,7 +395,7 @@ def upsert_round_trace(
                 conviction_tx_hash=conviction_tx_hash,
                 micro_settlement_tx_hash=micro_settlement_tx_hash,
                 round_duration_seconds=round_duration_seconds,
-                timestamp=timestamp or datetime.utcnow(),
+                timestamp=timestamp or datetime.now(UTC),
             )
             session.add(existing)
         else:

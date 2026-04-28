@@ -13,7 +13,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, asdict, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Optional
 
 from sqlalchemy import create_engine, select
@@ -110,7 +110,7 @@ class RiskManager:
         indicator = indicators.get(severity, "ℹ️ ")
         
         # Print to stdout with clear visual indicator
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(UTC).isoformat()
         print(
             f"{indicator}[{timestamp}] RISK MANAGER | "
             f"Session: {self.session_id} | Round: {round_number} | "
@@ -128,7 +128,7 @@ class RiskManager:
                 details_json=json.dumps(details),
                 action_taken=action_taken,
                 resolved_at=None,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
             db.add(event)
             db.commit()
@@ -266,7 +266,7 @@ class RiskManager:
                         delta_from_previous_bull=None,
                         delta_from_previous_bear=None,
                         drift_flagged=False,
-                        timestamp=datetime.utcnow(),
+                        timestamp=datetime.now(UTC),
                     )
                     db.add(current_record)
                 else:
@@ -275,7 +275,7 @@ class RiskManager:
                     current_record.delta_from_previous_bull = None
                     current_record.delta_from_previous_bear = None
                     current_record.drift_flagged = False
-                    current_record.timestamp = datetime.utcnow()
+                    current_record.timestamp = datetime.now(UTC)
                 db.commit()
                 return RiskDecision(action="PROCEED", reason=None)
             
@@ -297,7 +297,7 @@ class RiskManager:
                     delta_from_previous_bull=int(bull_delta),
                     delta_from_previous_bear=int(bear_delta),
                     drift_flagged=drift_flagged,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 )
                 db.add(current_record)
             else:
@@ -306,7 +306,7 @@ class RiskManager:
                 current_record.delta_from_previous_bull = int(bull_delta)
                 current_record.delta_from_previous_bear = int(bear_delta)
                 current_record.drift_flagged = drift_flagged
-                current_record.timestamp = datetime.utcnow()
+                current_record.timestamp = datetime.now(UTC)
             db.commit()
             
             # Check if drift exceeds hard limit (pause threshold)
@@ -402,7 +402,7 @@ class RiskManager:
                 signature_present=signature_present,
                 signature_valid=signature_valid,
                 accepted=signature_valid,  # Only accept if signature is valid
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
             db.add(audit_record)
             db.commit()
@@ -702,7 +702,7 @@ class RiskManager:
                     signature_present=signature is not None,
                     signature_valid=False,
                     accepted=False,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 )
                 db.add(audit_record)
                 db.commit()
@@ -736,7 +736,7 @@ class RiskManager:
                     signature_present=signature is not None,
                     signature_valid=False,
                     accepted=False,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 )
                 db.add(audit_record)
                 db.commit()
@@ -772,7 +772,7 @@ class RiskManager:
                     signature_present=False,
                     signature_valid=False,
                     accepted=False,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 )
                 db.add(audit_record)
                 db.commit()
@@ -805,7 +805,7 @@ class RiskManager:
                 signature_present=True,
                 signature_valid=True,
                 accepted=True,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
             db.add(audit_record)
             db.commit()
@@ -851,7 +851,7 @@ class RiskManager:
                     new_reading = GasPriceHistory(
                         session_id=session_id,
                         gas_price_gwei=current_gas_gwei,
-                        timestamp=datetime.utcnow(),
+                        timestamp=datetime.now(UTC),
                     )
                     db.add(new_reading)
                     db.commit()
@@ -861,7 +861,7 @@ class RiskManager:
                 new_reading = GasPriceHistory(
                     session_id=session_id,
                     gas_price_gwei=current_gas_gwei,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 )
                 db.add(new_reading)
                 db.commit()

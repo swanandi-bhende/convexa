@@ -266,7 +266,7 @@ class SafetyEvent(Base):
     __tablename__ = "safety_events"
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('stale_data', 'conviction_drift', 'low_stake', 'debate_timeout', 'invalid_axl_signature', 'gas_spike', 'data_source_failure')",
+            "event_type IN ('stale_data', 'conviction_drift', 'low_stake', 'debate_timeout', 'invalid_axl_signature', 'gas_spike', 'data_source_failure', 'axl_message_timeout')",
             name="ck_safety_events_event_type",
         ),
         CheckConstraint(

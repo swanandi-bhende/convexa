@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Dict
 
 from utils.db.schema import StrategyAdaptation
@@ -105,12 +105,12 @@ class StrategyAdapter:
                         times_cited_in_winning_round=0,
                         win_rate=0.0,
                         current_weight=float(weight),
-                        last_updated=datetime.utcnow(),
+                        last_updated=datetime.now(UTC),
                     )
                     session.add(row)
                 else:
                     row.current_weight = float(weight)
-                    row.last_updated = datetime.utcnow()
+                    row.last_updated = datetime.now(UTC)
 
             # Write strategy_adaptations audit row
             adaptation = StrategyAdaptation(
@@ -120,7 +120,7 @@ class StrategyAdapter:
                 previous_weights_json=json.dumps(previous_weights),
                 new_weights_json=json.dumps(new_weights),
                 reasoning=reasoning,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
             session.add(adaptation)
             session.commit()

@@ -51,6 +51,15 @@ def _build_auth_headers(api_key: str) -> dict[str, str]:
     return headers
 
 
+DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def set_dry_run(value: bool) -> None:
+    global DRY_RUN
+    DRY_RUN = bool(value)
+    os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
+
+
 def _create_http_client() -> httpx.Client:
     if not KEEPERHUB_API_KEY:
         raise RuntimeError("Missing KEEPERHUB_API_KEY")
@@ -298,6 +307,13 @@ def poll_job_status(job_id: str, timeout_seconds: int = 300) -> JobResult:
     """
     if not job_id:
         raise ValueError("job_id is required")
+
+    if DRY_RUN:
+        with get_session() as session:
+            row = session.query(KeeperHubJobModel).filter(KeeperHubJobModel.job_id == job_id).one_or_none()
+            if row is not None:
+                return JobResult(True, job_id, str(row.current_status), row.tx_hash, row.actual_gas_price_gwei, row.confirmed_at, {"status": row.current_status})
+        return JobResult(True, job_id, "confirmed", f"dry-run:{job_id}", 0.0, _now_utc_naive(), {"status": "confirmed"})
 
     start = datetime.now().timestamp()
     deadline = start + float(timeout_seconds)
@@ -597,26 +613,23 @@ def submit_job(
     # Safe simulation mode: when DRY_RUN is enabled or explicit simulate flag set,
     # insert a local keeperhub_jobs row and return a fake job id without calling the network.
     simulate_flag = os.getenv("KEEPERHUB_SIMULATE_SUBMIT", "").strip().lower() in {"1", "true", "yes"}
-    dry_run = os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes"}
-    if simulate_flag or dry_run:
+    if simulate_flag or DRY_RUN:
+        from utils.dry_run_adapter import DryRunAdapter
+
         fake_job_id = f"sim-job-{int(time.time())}"
-        _insert_keeperhub_job_row(
-            session_id=session_id,
-            round_number=round_number,
-            job_id=fake_job_id,
-            job_type=job_type,
-            swap_quote_id=getattr(swap_calldata_obj, "quote_id", None),
-            submitted_at=_now_utc_naive(),
-            max_gas_price_gwei=float(retry_policy.maxGasPriceGwei if hasattr(retry_policy, 'maxGasPriceGwei') else getattr(retry_policy, 'maxGasPriceGwei', 0) or 0),
-            deadline_timestamp=int(getattr(swap_calldata_obj, "deadline_unix", 0) or 0),
-            retry_policy=retry_policy,
-            current_status="submitted",
-            tx_hash=None,
-            actual_gas_price_gwei=None,
-            keeperhub_fee_wei=None,
-            error_message=None,
+        adapter = DryRunAdapter(session_id=session_id, round_number=round_number)
+        simulated = adapter.simulate_keeperhub_job(
+            {
+                "session_id": session_id,
+                "round_number": round_number,
+                "job_type": job_type,
+                "job_id": fake_job_id,
+                "swap_quote_id": getattr(swap_calldata_obj, "quote_id", None),
+                "deadline": int(getattr(swap_calldata_obj, "deadline_unix", 0) or 0),
+                "max_gas_price_gwei": float(retry_policy.maxGasPriceGwei if hasattr(retry_policy, "maxGasPriceGwei") else getattr(retry_policy, "maxGasPriceGwei", 0) or 0),
+            }
         )
-        return fake_job_id
+        return str(simulated.get("job_id") or fake_job_id)
 
     web3_client = Web3(Web3.HTTPProvider(ALCHEMY_RPC_URL))
     if not web3_client.is_connected():

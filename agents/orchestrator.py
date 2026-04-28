@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import argparse
+import atexit
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 import json
 import os
+import re
+import signal
 from pathlib import Path
 import sys
 import time
+import subprocess
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +31,7 @@ from agents.memory import AgentMemory, PerformanceTracker
 from agents.strategy_adapter import StrategyAdapter
 from keeper import execution_handler
 from keeper import keeper_handler
+from uniswap import swap_executor
 from utils.db_manager import (
     get_debate_session_by_session_id,
     init_database,
@@ -38,9 +44,109 @@ from utils.risk_manager import RiskManager, RiskDecision
 
 load_dotenv()
 
-# Safe mode prevents any real onchain transactions or RPC-dependent actions.
-# Set ORCHESTRATOR_SAFE_MODE=1 in env to enable.
-SAFE_MODE = os.getenv("ORCHESTRATOR_SAFE_MODE", "0") == "1"
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the Convexa debate orchestrator")
+    parser.add_argument("--token", default="ETH", help="Base token symbol used to build the default token pair.")
+    parser.add_argument("--duration", default=None, help='Debate length like "10rounds" or "60minutes".')
+    parser.add_argument("--dry-run", action="store_true", help="Enable simulated execution paths across modules.")
+    parser.add_argument("--round-interval", type=int, default=60, help="Seconds between debate rounds.")
+    parser.add_argument(
+        "--min-stake",
+        type=float,
+        default=float(os.getenv("MIN_STAKE_ETH", "0.001")),
+        help="Minimum stake per side in ETH; defaults to the value from .env.",
+    )
+    parser.add_argument(
+        "--token-pair",
+        default=None,
+        help='Token pair symbol like "ETH/USDC"; defaults to <token>/USDC when omitted.',
+    )
+    return parser
+
+
+_CLI_ARGS, _CLI_UNKNOWN_ARGS = _build_arg_parser().parse_known_args()
+TOKEN_SYMBOL = _CLI_ARGS.token.strip().upper() or "ETH"
+ROUND_INTERVAL_SECONDS = int(_CLI_ARGS.round_interval)
+MIN_STAKE_ETH = float(_CLI_ARGS.min_stake)
+TOKEN_PAIR = str(_CLI_ARGS.token_pair or f"{TOKEN_SYMBOL}/USDC")
+REQUESTED_DURATION = _CLI_ARGS.duration
+DRY_RUN = bool(_CLI_ARGS.dry_run or os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes", "y", "on"})
+
+os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
+os.environ["MIN_STAKE_ETH"] = str(MIN_STAKE_ETH)
+os.environ["MIN_STAKE_EACH_SIDE_ETH"] = str(MIN_STAKE_ETH)
+
+
+def parse_duration(duration_str: str, round_interval_seconds: int = ROUND_INTERVAL_SECONDS) -> int:
+    value = duration_str.strip().lower()
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(rounds?|minutes?)", value)
+    if match is None:
+        raise ValueError(f"Unsupported duration format: {duration_str}")
+
+    amount = float(match.group(1))
+    unit = match.group(2)
+    if unit.startswith("round"):
+        return max(1, int(amount))
+
+    rounds = amount * 60.0 / float(max(round_interval_seconds, 1))
+    return max(1, int(round(rounds)))
+
+
+def set_dry_run(value: bool) -> None:
+    global DRY_RUN
+    DRY_RUN = bool(value)
+    os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
+
+
+def configure_runtime(dry_run: bool) -> None:
+    set_dry_run(dry_run)
+    from agents import bear_agent, bull_agent, judge_agent
+    from keeper import execution_handler as keeper_execution_handler
+    from keeper import keeper_handler as keeper_settlement_handler
+    from uniswap import swap_executor
+    from utils import db_manager, market_data, risk_manager
+
+    for module in (
+        bear_agent,
+        bull_agent,
+        judge_agent,
+        keeper_execution_handler,
+        keeper_settlement_handler,
+        swap_executor,
+        db_manager,
+        market_data,
+        risk_manager,
+    ):
+        try:
+            module.set_dry_run(dry_run)
+        except AttributeError:
+            pass
+
+
+AXL_NODE_PROCESSES: list[subprocess.Popen[Any]] = []
+AXL_NODE_LOG_HANDLES: list[Any] = []
+AXL_NODE_CONFIGS = {
+    "bear": {
+        "cwd": PROJECT_ROOT / "axl-nodes" / "bear",
+        "log": PROJECT_ROOT / "axl-nodes" / "logs" / "bear.log",
+        "port": 8001,
+        "url": os.getenv("BEAR_AXL_HTTP_URL", "http://localhost:8001"),
+    },
+    "bull": {
+        "cwd": PROJECT_ROOT / "axl-nodes" / "bull",
+        "log": PROJECT_ROOT / "axl-nodes" / "logs" / "bull.log",
+        "port": 8002,
+        "url": os.getenv("BULL_AXL_HTTP_URL", "http://localhost:8002"),
+    },
+    "judge": {
+        "cwd": PROJECT_ROOT / "axl-nodes" / "judge",
+        "log": PROJECT_ROOT / "axl-nodes" / "logs" / "judge.log",
+        "port": 8003,
+        "url": os.getenv("JUDGE_AXL_HTTP_URL", "http://localhost:8003"),
+    },
+}
+
 
 
 STATE_IDLE = "IDLE"
@@ -63,7 +169,7 @@ ALL_STATES = {
 
 # Deterministic transition map: each orchestrator function drives one of these edges.
 STATE_TRANSITIONS: dict[str, set[str]] = {
-    STATE_IDLE: {STATE_ACCEPTING_STAKES},
+    STATE_IDLE: {STATE_ACCEPTING_STAKES, STATE_SETTLEMENT_TRIGGERED, STATE_DEBATE_ENDED},
     STATE_ACCEPTING_STAKES: {STATE_ROUND_IN_PROGRESS, STATE_IDLE},
     STATE_ROUND_IN_PROGRESS: {STATE_AWAITING_JUDGE, STATE_IDLE},
     STATE_AWAITING_JUDGE: {STATE_CONVICTION_UPDATED, STATE_DEBATE_ENDED, STATE_IDLE},
@@ -72,7 +178,7 @@ STATE_TRANSITIONS: dict[str, set[str]] = {
     STATE_SETTLEMENT_TRIGGERED: {STATE_DEBATE_ENDED},
 }
 
-ROUND_INTERVAL_SECONDS = int(os.getenv("ROUND_INTERVAL_SECONDS", "60"))
+STAKE_COLLECTION_WINDOW_SECONDS = int(os.getenv("STAKE_COLLECTION_WINDOW_SECONDS", "120"))
 WIN_THRESHOLD = int(os.getenv("CONVICTION_WIN_THRESHOLD", "70"))
 NEUTRAL_AGENT_ARGUMENT = {
     "argument": "Neutral fallback: agent output unavailable this round; no directional edge inferred.",
@@ -140,7 +246,7 @@ def _load_abi(abi_path: Path) -> list[dict[str, Any]]:
 
 
 def _get_web3_and_conviction_contract() -> tuple[Web3, Any]:
-    if SAFE_MODE:
+    if DRY_RUN:
         # In safe mode, return dummy placeholders; callers should handle None appropriately.
         return None, None
 
@@ -162,7 +268,7 @@ def _get_web3_and_conviction_contract() -> tuple[Web3, Any]:
 
 
 def _read_onchain_scores() -> tuple[int, int]:
-    if SAFE_MODE:
+    if DRY_RUN:
         # Return simulated neutral scores in safe mode
         return 0, 0
 
@@ -210,7 +316,7 @@ def _send_contract_tx(
     contract_function: Any,
     gas_limit_env_var: str,
 ) -> str:
-    if SAFE_MODE:
+    if DRY_RUN:
         return "simulated-tx-hash"
 
     chain_id = int(web3.eth.chain_id)
@@ -269,8 +375,612 @@ def _ping_axl_node(base_url: str) -> tuple[bool, str]:
     return False, f"unreachable: {base}"
 
 
+ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_DIM = "\033[2m"
+ANSI_GREEN = "\033[32m"
+ANSI_RED = "\033[31m"
+ANSI_YELLOW = "\033[33m"
+ANSI_CYAN = "\033[36m"
+
+
+def _ansi_wrap(text: str, color: str) -> str:
+    return f"{color}{text}{ANSI_RESET}"
+
+
+def _format_meter(score: int, width: int = 20) -> str:
+    bounded = max(0, min(100, int(score)))
+    filled = int(round((bounded / 100.0) * width))
+    return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
+
+
+def _risk_decision_to_dict(decision: RiskDecision | None) -> dict[str, Any] | None:
+    if decision is None:
+        return None
+    if is_dataclass(decision):
+        return asdict(decision)
+    return {
+        "action": getattr(decision, "action", None),
+        "reason": getattr(decision, "reason", None),
+        "context": getattr(decision, "context", None),
+    }
+
+
+def display_debate_header(session_id: str, token_pair: str, dry_run: bool) -> None:
+    mode_label = "DRY RUN" if dry_run else "LIVE RUN"
+    print(ANSI_BOLD + "=" * 72 + ANSI_RESET)
+    print(_ansi_wrap(f"CONVEXA DEBATE ORCHESTRATOR [{mode_label}]", ANSI_CYAN))
+    print(f"session_id: {session_id}")
+    print(f"token_pair: {token_pair}")
+    print(f"round_interval_seconds: {ROUND_INTERVAL_SECONDS}")
+    print(f"win_threshold: {WIN_THRESHOLD}")
+    print(_ansi_wrap("AXL nodes: bear=8001 | bull=8002 | judge=8003", ANSI_DIM))
+    print(ANSI_BOLD + "=" * 72 + ANSI_RESET)
+
+
+def display_round_summary(
+    round_number: int,
+    verdict_dict: dict[str, Any],
+    conviction_scores: tuple[int, int],
+    round_duration_seconds: float,
+    dry_run: bool,
+) -> None:
+    bull_score = int(verdict_dict.get("bullScore", conviction_scores[0]))
+    bear_score = int(verdict_dict.get("bearScore", conviction_scores[1]))
+    winner = str(verdict_dict.get("winner", "draw")).strip().lower() or "draw"
+    winner_color = ANSI_GREEN if winner == "bull" else ANSI_RED if winner == "bear" else ANSI_YELLOW
+    settlement_result = verdict_dict.get("micro_settlement_result") or {}
+    settlement_tx_hash = settlement_result.get("tx_hash") or verdict_dict.get("micro_settlement_tx_hash")
+
+    print(ANSI_BOLD + "-" * 72 + ANSI_RESET)
+    print(
+        _ansi_wrap(f"ROUND {round_number} COMPLETE", ANSI_CYAN)
+        + f" | duration={round_duration_seconds:.2f}s | mode={'DRY' if dry_run else 'LIVE'}"
+    )
+    print(
+        f"winner={_ansi_wrap(winner.upper(), winner_color)} | "
+        f"bull={bull_score:>3} {_format_meter(bull_score)} | "
+        f"bear={bear_score:>3} {_format_meter(bear_score)}"
+    )
+    if settlement_tx_hash:
+        print(f"micro_settlement_tx_hash: {settlement_tx_hash}")
+    if verdict_dict.get("reason"):
+        print(f"round_status: {verdict_dict.get('reason')}")
+    print(ANSI_BOLD + "-" * 72 + ANSI_RESET)
+
+
+def _resolve_settlement_wallets() -> list[str]:
+    wallets: list[str] = []
+    env_wallets = os.getenv("SETTLEMENT_TEST_WALLETS", "").strip()
+    if env_wallets:
+        for candidate in env_wallets.split(","):
+            cleaned = candidate.strip()
+            if cleaned:
+                wallets.append(cleaned)
+
+    if len(wallets) < 3:
+        address_candidates = [
+            os.getenv("AGENT_WALLET_ADDRESS"),
+            os.getenv("KEEPERHUB_EXECUTOR_ADDRESS"),
+        ]
+        private_key_candidates = [
+            os.getenv("ORCHESTRATOR_PRIVATE_KEY"),
+            os.getenv("AGENT_WALLET_PRIVATE_KEY"),
+            os.getenv("DEPLOYER_PRIVATE_KEY"),
+        ]
+        for candidate in address_candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                wallets.append(candidate.strip())
+        for private_key in private_key_candidates:
+            if len(wallets) >= 3:
+                break
+            if isinstance(private_key, str) and private_key.strip() and not private_key.strip().startswith("your_"):
+                try:
+                    wallets.append(Web3().eth.account.from_key(private_key.strip()).address)
+                except Exception:
+                    continue
+
+    unique_wallets: list[str] = []
+    seen: set[str] = set()
+    for wallet in wallets:
+        normalized = wallet.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_wallets.append(normalized)
+        if len(unique_wallets) == 3:
+            break
+    return unique_wallets
+
+
+def _read_wallet_balances(wallets: list[str]) -> dict[str, int]:
+    if DRY_RUN:
+        return {wallet: 0 for wallet in wallets}
+
+    rpc_url = os.getenv("ALCHEMY_RPC_URL") or os.getenv("MARKET_DATA_RPC_URL")
+    if not rpc_url:
+        raise RuntimeError("Missing RPC URL for wallet balance verification")
+
+    web3 = Web3(Web3.HTTPProvider(rpc_url))
+    if not web3.is_connected():
+        raise RuntimeError("Unable to connect to RPC for wallet balance verification")
+
+    return {
+        wallet: int(web3.eth.get_balance(Web3.to_checksum_address(wallet)))
+        for wallet in wallets
+    }
+
+
+def execute_single_round(
+    session_id: str,
+    round_number: int,
+    token_pair: str,
+    dry_run: bool,
+) -> tuple[bool, dict[str, Any]]:
+    round_started_at = time.time()
+    risk_manager = RiskManager(session_id)
+    round_trace_payload: dict[str, Any] = {
+        "session_id": session_id,
+        "round_number": round_number,
+        "dry_run": dry_run,
+        "round_completed_successfully": False,
+    }
+    end_condition_result: dict[str, Any] = {"end": False}
+    micro_settlement_result: dict[str, Any] | None = None
+
+    gas_decision = risk_manager.check_gas_conditions(round_number, session_id)
+    round_trace_payload["gas_decision"] = _risk_decision_to_dict(gas_decision)
+    if gas_decision.action == "HALT":
+        round_trace_payload["halt_reason"] = gas_decision.reason
+        upsert_round_trace(
+            session_id=session_id,
+            round_number=round_number,
+            judge_verdict_json=round_trace_payload,
+            timestamp=_utcnow(),
+        )
+        display_round_summary(round_number, round_trace_payload, (0, 0), 0.0, dry_run)
+        return False, {"end": False, "reason": gas_decision.reason, "action": gas_decision.action, "bull_score": 0, "bear_score": 0}
+
+    if gas_decision.action == "DELAY_SWAP":
+        round_trace_payload["gas_delay_seconds"] = int(gas_decision.context.get("delay_seconds", 15)) if isinstance(gas_decision.context, dict) else 15
+
+    try:
+        snapshot = setup_round(session_id, round_number, token_pair, risk_manager)
+    except RecoverableRoundSetupError as exc:
+        round_trace_payload["setup_error"] = str(exc)
+        upsert_round_trace(
+            session_id=session_id,
+            round_number=round_number,
+            judge_verdict_json=round_trace_payload,
+            timestamp=_utcnow(),
+        )
+        display_round_summary(round_number, round_trace_payload, (0, 0), time.time() - round_started_at, dry_run)
+        return False, {"end": False, "reason": str(exc), "action": "RETRYABLE_SETUP_FAILURE", "bull_score": 0, "bear_score": 0}
+    except Exception as exc:
+        round_trace_payload["setup_error"] = f"{type(exc).__name__}: {exc}"
+        upsert_round_trace(
+            session_id=session_id,
+            round_number=round_number,
+            judge_verdict_json=round_trace_payload,
+            timestamp=_utcnow(),
+        )
+        display_round_summary(round_number, round_trace_payload, (0, 0), time.time() - round_started_at, dry_run)
+        return False, {"end": False, "reason": str(exc), "action": "SETUP_FAILED", "bull_score": 0, "bear_score": 0}
+
+    snapshot_payload = _coerce_snapshot_payload(snapshot)
+    freshness_decision = risk_manager.check_data_freshness(snapshot_payload, round_number)
+    round_trace_payload["data_freshness_decision"] = _risk_decision_to_dict(freshness_decision)
+    if freshness_decision.action in {"SKIP_ROUND", "HALT"}:
+        round_trace_payload["halt_reason"] = freshness_decision.reason
+        upsert_round_trace(
+            session_id=session_id,
+            round_number=round_number,
+            market_snapshot_json=snapshot_payload,
+            judge_verdict_json=round_trace_payload,
+            timestamp=_utcnow(),
+        )
+        display_round_summary(round_number, round_trace_payload, (0, 0), time.time() - round_started_at, dry_run)
+        return False, {"end": False, "reason": freshness_decision.reason, "action": freshness_decision.action, "bull_score": 0, "bear_score": 0}
+
+    bull_argument, bear_argument, partial_round = trigger_agents(session_id, round_number, snapshot)
+    round_trace_payload["partial_round"] = partial_round
+    round_trace_payload["bull_argument"] = bull_argument
+    round_trace_payload["bear_argument"] = bear_argument
+
+    prior_bull_score, prior_bear_score = _read_onchain_scores()
+    pre_drift_decision = risk_manager.check_conviction_drift(
+        round_number,
+        int(prior_bull_score),
+        int(prior_bear_score),
+        session_id,
+    )
+    round_trace_payload["pre_drift_decision"] = _risk_decision_to_dict(pre_drift_decision)
+    if pre_drift_decision.action in {"PAUSE", "HALT", "REJECT_MESSAGE"}:
+        round_trace_payload["halt_reason"] = pre_drift_decision.reason
+        upsert_round_trace(
+            session_id=session_id,
+            round_number=round_number,
+            bull_argument_json=bull_argument,
+            bear_argument_json=bear_argument,
+            judge_verdict_json=round_trace_payload,
+            bull_score_after_round=prior_bull_score,
+            bear_score_after_round=prior_bear_score,
+            timestamp=_utcnow(),
+        )
+        display_round_summary(round_number, round_trace_payload, (prior_bull_score, prior_bear_score), time.time() - round_started_at, dry_run)
+        return False, {"end": False, "reason": pre_drift_decision.reason, "action": pre_drift_decision.action, "bull_score": int(prior_bull_score), "bear_score": int(prior_bear_score)}
+
+    verdict, (bull_score, bear_score) = run_judging(
+        session_id,
+        round_number,
+        bull_argument,
+        bear_argument,
+        snapshot,
+        risk_manager,
+    )
+    round_trace_payload["verdict"] = verdict
+
+    post_drift_decision = risk_manager.check_conviction_drift(round_number, int(bull_score), int(bear_score), session_id)
+    round_trace_payload["post_drift_decision"] = _risk_decision_to_dict(post_drift_decision)
+    if post_drift_decision.action in {"PAUSE", "HALT", "REJECT_MESSAGE"}:
+        round_trace_payload["halt_reason"] = post_drift_decision.reason
+        upsert_round_trace(
+            session_id=session_id,
+            round_number=round_number,
+            bull_argument_json=bull_argument,
+            bear_argument_json=bear_argument,
+            judge_verdict_json=round_trace_payload,
+            bull_score_after_round=int(bull_score),
+            bear_score_after_round=int(bear_score),
+            timestamp=_utcnow(),
+        )
+        display_round_summary(round_number, round_trace_payload, (int(bull_score), int(bear_score)), time.time() - round_started_at, dry_run)
+        return False, {"end": False, "reason": post_drift_decision.reason, "action": post_drift_decision.action, "bull_score": int(bull_score), "bear_score": int(bear_score)}
+
+    end_condition_result = check_end_conditions(
+        session_id=session_id,
+        bull_score=int(bull_score),
+        bear_score=int(bear_score),
+        round_number=round_number,
+        max_rounds=int(os.getenv("MAX_DEBATE_ROUNDS", "20")),
+        risk_manager=risk_manager,
+    )
+    round_trace_payload["end_condition_result"] = end_condition_result
+
+    settlement_delay_seconds = 0.0
+    if gas_decision.action == "DELAY_SWAP":
+        settlement_delay_seconds = float(gas_decision.context.get("delay_seconds", 15)) if isinstance(gas_decision.context, dict) else 15.0
+
+    if settlement_delay_seconds > 0:
+        time.sleep(settlement_delay_seconds)
+
+    if not bool(end_condition_result.get("end")) and gas_decision.action != "SKIP_SWAP":
+        losing_side = "bear" if int(bull_score) >= int(bear_score) else "bull"
+        try:
+            swap_result = swap_executor.execute_micro_settlement(
+                session_id=session_id,
+                round_number=round_number,
+                losing_side=losing_side,
+                verdict_dict=verdict,
+            )
+            if is_dataclass(swap_result):
+                micro_settlement_result = asdict(swap_result)
+            elif isinstance(swap_result, dict):
+                micro_settlement_result = dict(swap_result)
+            else:
+                micro_settlement_result = {"raw": str(swap_result)}
+        except Exception as exc:
+            micro_settlement_result = {"success": False, "reason": f"micro_settlement_failed:{exc}"}
+        round_trace_payload["micro_settlement_result"] = micro_settlement_result
+    elif gas_decision.action == "SKIP_SWAP":
+        round_trace_payload["micro_settlement_result"] = {"success": False, "reason": "skipped_by_gas_policy"}
+
+    elapsed_seconds = time.time() - round_started_at
+    remaining_seconds = max(0.0, float(ROUND_INTERVAL_SECONDS) - elapsed_seconds)
+    if remaining_seconds > 0:
+        time.sleep(remaining_seconds)
+
+    round_trace_payload["round_completed_successfully"] = True
+    end_condition_result.update(
+        {
+            "bull_score": int(bull_score),
+            "bear_score": int(bear_score),
+            "verdict": verdict,
+            "micro_settlement_result": micro_settlement_result,
+        }
+    )
+    upsert_round_trace(
+        session_id=session_id,
+        round_number=round_number,
+        bull_argument_json=bull_argument,
+        bear_argument_json=bear_argument,
+        judge_verdict_json=round_trace_payload,
+        bull_score_after_round=int(bull_score),
+        bear_score_after_round=int(bear_score),
+        round_duration_seconds=elapsed_seconds,
+        micro_settlement_tx_hash=(
+            micro_settlement_result.get("tx_hash") if isinstance(micro_settlement_result, dict) else None
+        ),
+        timestamp=_utcnow(),
+    )
+    display_round_summary(round_number, round_trace_payload, (int(bull_score), int(bear_score)), elapsed_seconds, dry_run)
+    return True, end_condition_result
+
+
+def _get_debate_escrow_contract() -> tuple[Web3, Any]:
+    if DRY_RUN:
+        return None, None
+
+    rpc_url = os.getenv("ALCHEMY_RPC_URL") or os.getenv("MARKET_DATA_RPC_URL")
+    escrow_address = os.getenv("ESCROW_CONTRACT_ADDRESS")
+    if not rpc_url or not escrow_address:
+        raise RuntimeError("Missing RPC URL or escrow contract address")
+
+    escrow_abi = _load_abi(PROJECT_ROOT / "contracts" / "abi" / "DebateEscrow.json")
+    web3 = Web3(Web3.HTTPProvider(rpc_url))
+    if not web3.is_connected():
+        raise RuntimeError("Unable to connect to Unichain Sepolia RPC")
+
+    escrow_contract = web3.eth.contract(
+        address=Web3.to_checksum_address(escrow_address),
+        abi=escrow_abi,
+    )
+    return web3, escrow_contract
+
+
+def _get_axl_binary_path() -> Path:
+    binary_path = Path(os.getenv("AXL_BINARY_PATH", str(PROJECT_ROOT / "axl-nodes" / "axl")))
+    if not binary_path.is_absolute():
+        binary_path = (PROJECT_ROOT / binary_path).resolve()
+    return binary_path
+
+
+def startup_axl_nodes(dry_run: bool) -> None:
+    del dry_run
+
+    axl_binary = _get_axl_binary_path()
+    log_dir = PROJECT_ROOT / "axl-nodes" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    if not axl_binary.exists():
+        raise RuntimeError(f"AXL binary not found at {axl_binary}")
+
+    AXL_NODE_PROCESSES.clear()
+    AXL_NODE_LOG_HANDLES.clear()
+
+    for node_name, config in AXL_NODE_CONFIGS.items():
+        node_dir = config["cwd"]
+        private_key_path = node_dir / "data" / "private.pem"
+        private_key_path.parent.mkdir(parents=True, exist_ok=True)
+        if not private_key_path.exists():
+            subprocess.run(
+                ["openssl", "genpkey", "-algorithm", "ed25519", "-out", str(private_key_path)],
+                check=True,
+            )
+
+        log_path = config["log"]
+        log_handle = log_path.open("a", encoding="utf-8")
+        AXL_NODE_LOG_HANDLES.append(log_handle)
+        process = subprocess.Popen(
+            [str(axl_binary), "-config", "node-config.json"],
+            cwd=str(node_dir),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+        )
+        AXL_NODE_PROCESSES.append(process)
+
+    wait_for_axl_ready(timeout_seconds=30)
+
+
+def wait_for_axl_ready(timeout_seconds: int = 30) -> None:
+    deadline = time.monotonic() + float(timeout_seconds)
+    node_urls = {name: str(config["url"]) for name, config in AXL_NODE_CONFIGS.items()}
+    last_status: dict[str, str] = {name: "starting" for name in node_urls}
+
+    while time.monotonic() < deadline:
+        pending = []
+        for node_name, node_url in node_urls.items():
+            ok, detail = _ping_axl_node(node_url)
+            last_status[node_name] = detail
+            if not ok:
+                pending.append(node_name)
+
+        if not pending:
+            return
+
+        time.sleep(2)
+
+    shutdown_axl_nodes()
+    failed = ", ".join(f"{node}:{detail}" for node, detail in last_status.items())
+    raise RuntimeError(f"AXL startup timeout after {timeout_seconds}s. Last status: {failed}")
+
+
+def shutdown_axl_nodes() -> None:
+    while AXL_NODE_PROCESSES:
+        process = AXL_NODE_PROCESSES.pop()
+        try:
+            process.terminate()
+            process.wait(timeout=10)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    while AXL_NODE_LOG_HANDLES:
+        log_handle = AXL_NODE_LOG_HANDLES.pop()
+        try:
+            log_handle.close()
+        except Exception:
+            pass
+
+
+
+atexit.register(shutdown_axl_nodes)
+
+
+def _start_debate_contracts(session_id: str, duration_seconds: int) -> dict[str, Any]:
+    if DRY_RUN:
+        from utils.dry_run_adapter import DryRunAdapter
+
+        adapter = DryRunAdapter(session_id=session_id, round_number=0)
+        escrow_result = adapter.simulate_contract_call(
+            "DebateEscrow",
+            "startDebate",
+            {"session_id": session_id, "duration_seconds": duration_seconds},
+        )
+        conviction_result = adapter.simulate_contract_call(
+            "ConvictionTracker",
+            "startDebate",
+            {"session_id": session_id},
+        )
+        return {
+            "escrow_tx_hash": escrow_result.get("tx_hash"),
+            "conviction_tx_hash": conviction_result.get("tx_hash"),
+        }
+
+    rpc_url = os.getenv("ALCHEMY_RPC_URL") or os.getenv("MARKET_DATA_RPC_URL")
+    escrow_address = os.getenv("ESCROW_CONTRACT_ADDRESS")
+    conviction_address = os.getenv("CONVICTION_CONTRACT_ADDRESS")
+    if not rpc_url or not escrow_address or not conviction_address:
+        raise RuntimeError("Missing RPC URL or contract addresses for debate startup")
+
+    web3 = Web3(Web3.HTTPProvider(rpc_url))
+    if not web3.is_connected():
+        raise RuntimeError("Unable to connect to Unichain Sepolia RPC")
+
+    private_key = _select_private_key()
+    escrow_contract = web3.eth.contract(
+        address=Web3.to_checksum_address(escrow_address),
+        abi=_load_abi(PROJECT_ROOT / "contracts" / "abi" / "DebateEscrow.json"),
+    )
+    conviction_contract = web3.eth.contract(
+        address=Web3.to_checksum_address(conviction_address),
+        abi=_load_abi(PROJECT_ROOT / "contracts" / "abi" / "ConvictionTracker.json"),
+    )
+
+    return {
+        "escrow_tx_hash": _send_contract_tx(
+            web3=web3,
+            private_key=private_key,
+            contract_function=escrow_contract.functions.startDebate(int(duration_seconds)),
+            gas_limit_env_var="ESCROW_START_GAS_LIMIT",
+        ),
+        "conviction_tx_hash": _send_contract_tx(
+            web3=web3,
+            private_key=private_key,
+            contract_function=conviction_contract.functions.startDebate(),
+            gas_limit_env_var="CONVICTION_START_GAS_LIMIT",
+        ),
+    }
+
+
+def run_stake_collection_window(session_id: str, duration_seconds: int = 120) -> bool:
+    _state_transition_or_raise(session_id, STATE_ACCEPTING_STAKES)
+    contract_result = _start_debate_contracts(session_id, duration_seconds)
+
+    print("=" * 72)
+    print("STAKE COLLECTION WINDOW OPEN")
+    print(f"session_id: {session_id}")
+    print(f"window_duration_seconds: {duration_seconds}")
+    print(f"escrow_start_tx: {contract_result.get('escrow_tx_hash')}")
+    print(f"conviction_start_tx: {contract_result.get('conviction_tx_hash')}")
+    print("=" * 72)
+
+    if DRY_RUN:
+        bull_stake_wei = 0
+        bear_stake_wei = 0
+        is_active = True
+    else:
+        _web3, escrow_contract = _get_debate_escrow_contract()
+        bull_stake_wei, bear_stake_wei, is_active = escrow_contract.functions.getStakeInfo().call()
+
+    start_time = time.monotonic()
+    last_refresh = -10.0
+    while True:
+        elapsed = time.monotonic() - start_time
+        remaining = max(0.0, float(duration_seconds) - elapsed)
+        if elapsed - last_refresh >= 10 or remaining <= 0:
+            if not DRY_RUN:
+                _web3, escrow_contract = _get_debate_escrow_contract()
+                bull_stake_wei, bear_stake_wei, is_active = escrow_contract.functions.getStakeInfo().call()
+            bull_stake_eth = float(Web3.from_wei(int(bull_stake_wei), "ether"))
+            bear_stake_eth = float(Web3.from_wei(int(bear_stake_wei), "ether"))
+            line = (
+                f"\r[STAKE WINDOW] remaining={int(remaining):>3}s | "
+                f"bull={bull_stake_eth:.4f} ETH | bear={bear_stake_eth:.4f} ETH | active={bool(is_active)}"
+            )
+            sys.stdout.write(line.ljust(140))
+            sys.stdout.flush()
+            last_refresh = elapsed
+
+        if remaining <= 0:
+            break
+
+        time.sleep(1)
+
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+    stake_manager = RiskManager(session_id)
+    for attempt in range(3):
+        minimum_stake_decision = stake_manager.check_minimum_stakes(session_id=session_id, round_number=0)
+        if minimum_stake_decision.action == "PROCEED":
+            print(
+                f"[ORCHESTRATOR] Stake window confirmed | bull={float(Web3.from_wei(int(bull_stake_wei), 'ether')):.4f} ETH | "
+                f"bear={float(Web3.from_wei(int(bear_stake_wei), 'ether')):.4f} ETH"
+            )
+            _state_transition_or_raise(session_id, STATE_ROUND_IN_PROGRESS)
+            return True
+
+        if attempt < 2:
+            print(
+                f"[ORCHESTRATOR] Minimum stakes not met ({minimum_stake_decision.reason}); extending by 60 seconds "
+                f"(attempt {attempt + 2}/3)."
+            )
+            time.sleep(60)
+            if not DRY_RUN:
+                _web3, escrow_contract = _get_debate_escrow_contract()
+                bull_stake_wei, bear_stake_wei, is_active = escrow_contract.functions.getStakeInfo().call()
+            continue
+
+        abort_reason = f"minimum stakes not met after 3 checks: {minimum_stake_decision.reason or 'insufficient stake'}"
+        print(f"[ORCHESTRATOR] {abort_reason}")
+        if DRY_RUN:
+            from utils.dry_run_adapter import DryRunAdapter
+
+            adapter = DryRunAdapter(session_id=session_id, round_number=0)
+            adapter.simulate_contract_call(
+                "DebateEscrow",
+                "emergencyPause",
+                {"session_id": session_id, "reason": abort_reason},
+            )
+        else:
+            _web3, escrow_contract = _get_debate_escrow_contract()
+            private_key = _select_private_key()
+            _send_contract_tx(
+                web3=_web3,
+                private_key=private_key,
+                contract_function=escrow_contract.functions.emergencyPause(abort_reason),
+                gas_limit_env_var="ESCROW_PAUSE_GAS_LIMIT",
+            )
+
+        update_debate_session(
+            session_id,
+            status="ABORTED",
+            settlement_tx_hash=f"abort:{abort_reason}",
+            end_time=_utcnow(),
+        )
+        upsert_round_trace(
+            session_id=session_id,
+            round_number=0,
+            judge_verdict_json={"abort_reason": abort_reason},
+            timestamp=_utcnow(),
+        )
+        return False
+
+
 def initialize_debate_session(token_pair: str, max_rounds: int, round_interval_seconds: int) -> str:
-    """Create an orchestrator session and start both onchain debate contracts."""
+    """Create an orchestrator session record before the stake window opens."""
     init_database()
 
     try:
@@ -279,107 +989,13 @@ def initialize_debate_session(token_pair: str, max_rounds: int, round_interval_s
         raise RuntimeError(f"KeeperHub startup connectivity check failed: {exc}") from exc
 
     session_id = str(uuid4())
-    start_time = _utcnow()
-
     insert_debate_session(
         session_id=session_id,
         token_pair=token_pair,
-        start_time=start_time,
+        start_time=_utcnow(),
         total_rounds=max_rounds,
         status=STATE_IDLE,
     )
-
-    rpc_url = os.getenv("ALCHEMY_RPC_URL") or os.getenv("MARKET_DATA_RPC_URL")
-    escrow_address = os.getenv("ESCROW_CONTRACT_ADDRESS")
-    conviction_address = os.getenv("CONVICTION_CONTRACT_ADDRESS")
-
-    if not rpc_url or not escrow_address or not conviction_address:
-        raise RuntimeError("Missing RPC URL or contract addresses for orchestrator session init")
-
-    escrow_abi = _load_abi(PROJECT_ROOT / "contracts" / "abi" / "DebateEscrow.json")
-    conviction_abi = _load_abi(PROJECT_ROOT / "contracts" / "abi" / "ConvictionTracker.json")
-
-    web3 = Web3(Web3.HTTPProvider(rpc_url))
-    if not web3.is_connected():
-        raise RuntimeError("Unable to connect to Unichain Sepolia RPC")
-
-    private_key = _select_private_key()
-    escrow_contract = web3.eth.contract(address=Web3.to_checksum_address(escrow_address), abi=escrow_abi)
-    conviction_contract = web3.eth.contract(address=Web3.to_checksum_address(conviction_address), abi=conviction_abi)
-
-    debate_duration_seconds = int(max_rounds) * int(round_interval_seconds) * 2
-
-    allow_active_reuse = os.getenv("ORCHESTRATOR_ALLOW_ACTIVE_DEBATE_REUSE", "1") == "1"
-
-    escrow_tx_hash: str = "not-submitted"
-    conviction_tx_hash: str = "not-submitted"
-    try:
-        escrow_active = bool(escrow_contract.functions.debateActive().call())
-    except Exception:
-        escrow_active = False
-
-    try:
-        conviction_active = bool(conviction_contract.functions.debateActive().call())
-    except Exception:
-        conviction_active = False
-
-    try:
-        if escrow_active and allow_active_reuse:
-            escrow_tx_hash = "skipped:escrow already active"
-        else:
-            try:
-                escrow_tx_hash = _send_contract_tx(
-                    web3=web3,
-                    private_key=private_key,
-                    contract_function=escrow_contract.functions.startDebate(int(debate_duration_seconds)),
-                    gas_limit_env_var="ESCROW_START_GAS_LIMIT",
-                )
-            except Exception as exc:  # noqa: BLE001
-                if allow_active_reuse:
-                    escrow_tx_hash = f"skipped:escrow start failed ({type(exc).__name__})"
-                else:
-                    raise
-
-        if conviction_active and allow_active_reuse:
-            conviction_tx_hash = "skipped:conviction already active"
-        else:
-            try:
-                conviction_tx_hash = _send_contract_tx(
-                    web3=web3,
-                    private_key=private_key,
-                    contract_function=conviction_contract.functions.startDebate(),
-                    gas_limit_env_var="CONVICTION_START_GAS_LIMIT",
-                )
-            except Exception as exc:  # noqa: BLE001
-                if allow_active_reuse:
-                    conviction_tx_hash = f"skipped:conviction start failed ({type(exc).__name__})"
-                else:
-                    raise
-    except Exception:
-        update_debate_session(session_id, status=STATE_IDLE)
-        raise
-
-    _state_transition_or_raise(session_id, STATE_ACCEPTING_STAKES)
-
-    try:
-        win_threshold = int(conviction_contract.functions.winThreshold().call())
-    except Exception:
-        win_threshold = int(os.getenv("CONVICTION_WIN_THRESHOLD", "70"))
-
-    countdown_seconds = int(os.getenv("ORCHESTRATOR_FIRST_ROUND_COUNTDOWN_SECONDS", str(round_interval_seconds)))
-
-    print("=" * 72)
-    print("CONVEXA ORCHESTRATOR SESSION STARTED")
-    print(f"session_id: {session_id}")
-    print(f"token_pair: {token_pair}")
-    print(f"escrow_contract: {escrow_address}")
-    print(f"conviction_contract: {conviction_address}")
-    print(f"win_threshold: {win_threshold}")
-    print(f"max_rounds: {max_rounds} | round_interval_seconds: {round_interval_seconds}")
-    print(f"escrow_start_tx: {escrow_tx_hash}")
-    print(f"conviction_start_tx: {conviction_tx_hash}")
-    print(f"countdown_to_first_round_seconds: {countdown_seconds}")
-    print("=" * 72)
 
     return session_id
 
@@ -479,8 +1095,8 @@ def trigger_agents(session_id: str, round_number: int, market_snapshot: Any) -> 
     bear_argument = dict(NEUTRAL_AGENT_ARGUMENT)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        bull_future = executor.submit(run_bull_round, round_number, token_pair)
-        bear_future = executor.submit(run_bear_round, round_number, token_pair)
+        bull_future = executor.submit(run_bull_round, session_id, round_number, token_pair)
+        bear_future = executor.submit(run_bear_round, session_id, round_number, token_pair)
 
         try:
             bull_result = bull_future.result(timeout=timeout_seconds)
@@ -546,7 +1162,7 @@ def run_judging(
     if not token_pair:
         raise ValueError("market_snapshot is missing token_pair")
 
-    verdict = run_judge_round(round_number, token_pair)
+    verdict = run_judge_round(session_id, round_number, token_pair)
 
     # Persist memory and performance for both agents so learning data is available.
     try:
@@ -672,7 +1288,7 @@ def check_end_conditions(
             end_reason = f"max_rounds_reached_{draw_info['draw_type']}"
             print(f"[ORCHESTRATOR] Max rounds reached. Draw evaluation: {draw_info}")
     else:
-        if SAFE_MODE:
+        if DRY_RUN:
             contract_settlement_triggered = False
         else:
             _web3, conviction_contract = _get_web3_and_conviction_contract()
@@ -700,50 +1316,112 @@ def check_end_conditions(
     }
 
 
-def trigger_settlement(session_id: str, winning_side: str) -> str:
-    """Trigger settlement path (winner payout or draw refund) and persist settlement hash."""
+def execute_final_settlement(
+    session_id: str,
+    winning_side: str,
+    final_scores: tuple[int, int],
+    dry_run: bool,
+) -> str:
+    """Coordinate the final swap redistribution, escrow settlement, and wallet verification."""
     _state_transition_or_raise(session_id, STATE_SETTLEMENT_TRIGGERED)
 
-    if winning_side == "draw":
-        settlement_tx_hash = keeper_handler.execute_draw_refund(session_id)
+    print(ANSI_BOLD + "=" * 72 + ANSI_RESET)
+    print(_ansi_wrap("FINAL SETTLEMENT", ANSI_CYAN))
+    print(f"session_id: {session_id}")
+    print(f"winning_side: {winning_side}")
+    print(f"final_scores: bull={int(final_scores[0])} bear={int(final_scores[1])}")
+    print(f"mode: {'DRY RUN' if dry_run else 'LIVE RUN'}")
+
+    redistribution_result = swap_executor.execute_final_settlement(session_id, winning_side, call_settle_side=False)
+    if not isinstance(redistribution_result, dict) or not redistribution_result.get("success"):
+        raise RuntimeError(f"Final settlement swap execution failed: {redistribution_result}")
+
+    wallets = _resolve_settlement_wallets()
+    balances_before: dict[str, int] = {}
+    if wallets:
+        balances_before = _read_wallet_balances(wallets)
+        print("wallet_balances_before_settle:")
+        for wallet, balance in balances_before.items():
+            print(f"  {wallet}: {balance}")
     else:
-        settlement_tx_hash = keeper_handler.execute_settlement(winning_side)
+        print("wallet_balances_before_settle: unavailable")
 
-    row = get_debate_session_by_session_id(session_id)
-    if row is None:
-        raise ValueError(f"Unknown debate session: {session_id}")
+    if DRY_RUN:
+        from utils.dry_run_adapter import DryRunAdapter
 
-    total_duration = (_utcnow() - row.start_time).total_seconds()
-    final_bull = int(row.final_bull_score or 0)
-    final_bear = int(row.final_bear_score or 0)
+        adapter = DryRunAdapter(session_id=session_id, round_number=0)
+        settle_result = adapter.simulate_contract_call(
+            "DebateEscrow",
+            "settleSide",
+            {"session_id": session_id, "winning_side": winning_side, "final_scores": final_scores},
+        )
+        settlement_tx_hash = str(settle_result.get("tx_hash") or f"dry-run:settleSide:{winning_side}")
+    else:
+        web3, escrow_contract = _get_debate_escrow_contract()
+        private_key = _select_private_key()
+        side_enum = 0 if winning_side.strip().lower() == "bull" else 1
+        settlement_tx_hash = _send_contract_tx(
+            web3=web3,
+            private_key=private_key,
+            contract_function=escrow_contract.functions.settleSide(side_enum),
+            gas_limit_env_var="ESCROW_SETTLE_GAS_LIMIT",
+        )
+
+    if wallets:
+        balances_after = _read_wallet_balances(wallets)
+        print("wallet_balances_after_settle:")
+        for wallet, balance in balances_after.items():
+            delta = balance - balances_before.get(wallet, 0)
+            print(f"  {wallet}: {balance} (delta={delta})")
+    else:
+        print("wallet_balances_after_settle: unavailable")
 
     update_debate_session(
         session_id,
         settlement_triggered=True,
         settlement_tx_hash=settlement_tx_hash,
     )
-
     _state_transition_or_raise(session_id, STATE_DEBATE_ENDED)
     update_debate_session(session_id, end_time=_utcnow())
 
-    print("=" * 72)
-    print("CONVEXA ORCHESTRATOR SESSION CLOSED")
-    print(f"session_id: {session_id}")
-    print(f"winner: {winning_side}")
-    print(f"final_scores: bull={final_bull} bear={final_bear}")
-    print(f"total_rounds: {row.total_rounds}")
-    print(f"total_debate_duration_seconds: {total_duration:.2f}")
+    row = get_debate_session_by_session_id(session_id)
+    total_duration = (_utcnow() - row.start_time).total_seconds() if row is not None else 0.0
+    total_rounds = int(row.total_rounds or 0) if row is not None else 0
     print(f"settlement_tx_hash: {settlement_tx_hash}")
+    print(f"total_rounds: {total_rounds}")
+    print(f"total_debate_duration_seconds: {total_duration:.2f}")
     print("round_trace audit trail is fully stored in SQLite")
-    print("=" * 72)
+    print(ANSI_BOLD + "=" * 72 + ANSI_RESET)
 
     return settlement_tx_hash
 
 
+def trigger_settlement(session_id: str, winning_side: str) -> str:
+    """Backward-compatible settlement wrapper."""
+    row = get_debate_session_by_session_id(session_id)
+    if row is None:
+        raise ValueError(f"Unknown debate session: {session_id}")
+    final_scores = (int(row.final_bull_score or 0), int(row.final_bear_score or 0))
+    return execute_final_settlement(session_id, winning_side, final_scores, DRY_RUN)
+
+
 def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) -> str:
     """Main orchestrator loop with deterministic pacing and clean interruption handling."""
+    global ROUND_INTERVAL_SECONDS
+    ROUND_INTERVAL_SECONDS = int(round_interval_seconds)
+    os.environ["MAX_DEBATE_ROUNDS"] = str(int(max_rounds))
+    configure_runtime(DRY_RUN)
+    startup_axl_nodes(DRY_RUN)
     session_id = initialize_debate_session(token_pair, max_rounds, round_interval_seconds)
+    stake_window_open = run_stake_collection_window(session_id, duration_seconds=STAKE_COLLECTION_WINDOW_SECONDS)
+    if not stake_window_open:
+        shutdown_axl_nodes()
+        return session_id
+
+    display_debate_header(session_id, token_pair, DRY_RUN)
+
     winning_side: str | None = None
+    final_scores: tuple[int, int] = (0, 0)
 
     # Initialize risk manager for safety checkpoints
     risk_manager = RiskManager(session_id)
@@ -755,57 +1433,21 @@ def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) ->
 
     try:
         for round_number in range(1, max_rounds + 1):
-            round_start_time = time.time()
+            round_completed, end_state = execute_single_round(session_id, round_number, token_pair, DRY_RUN)
 
-            while True:
+            if round_completed:
                 try:
-                    snapshot = setup_round(session_id, round_number, token_pair, risk_manager)
-                    break
-                except RecoverableRoundSetupError as exc:
-                    print(f"[ORCHESTRATOR] Round {round_number} pre-flight failed: {exc}. Retrying in 10s.")
-                    time.sleep(10)
+                    bull_adapter.apply_adaptation(round_number)
+                except Exception:
+                    pass
+                try:
+                    bear_adapter.apply_adaptation(round_number)
+                except Exception:
+                    pass
 
-            bull_argument, bear_argument, partial_round = trigger_agents(session_id, round_number, snapshot)
-            if partial_round:
-                print(f"[ORCHESTRATOR] Round {round_number} running with partial inputs; judge weighting should be lighter.")
-
-            verdict, (bull_score, bear_score) = run_judging(
-                session_id,
-                round_number,
-                bull_argument,
-                bear_argument,
-                snapshot,
-                risk_manager,
-            )
-
-            # After judge verdict and performance persistence, allow StrategyAdapter to adapt.
-            try:
-                bull_adapter.apply_adaptation(round_number)
-            except Exception:
-                pass
-            try:
-                bear_adapter.apply_adaptation(round_number)
-            except Exception:
-                pass
-
-            end_state = check_end_conditions(
-                session_id=session_id,
-                bull_score=bull_score,
-                bear_score=bear_score,
-                round_number=round_number,
-                max_rounds=max_rounds,
-                risk_manager=risk_manager,
-            )
-
-            round_duration = time.time() - round_start_time
-            upsert_round_trace(
-                session_id=session_id,
-                round_number=round_number,
-                round_duration_seconds=round_duration,
-                judge_verdict_json=verdict,
-                bull_score_after_round=int(bull_score),
-                bear_score_after_round=int(bear_score),
-                timestamp=_utcnow(),
+            final_scores = (
+                int(end_state.get("bull_score", final_scores[0])),
+                int(end_state.get("bear_score", final_scores[1])),
             )
 
             if bool(end_state.get("end")):
@@ -813,46 +1455,36 @@ def run_debate(token_pair: str, max_rounds: int, round_interval_seconds: int) ->
                 print(f"[ORCHESTRATOR] Debate end condition met at round {round_number}: {end_state}")
                 break
 
-            sleep_seconds = max(0.0, float(round_interval_seconds) - round_duration)
-            if sleep_seconds > 0:
-                time.sleep(sleep_seconds)
-
     except KeyboardInterrupt:
         update_debate_session(session_id, status=STATE_IDLE, end_time=_utcnow())
         print("[ORCHESTRATOR] Interrupted by user. Session moved to IDLE for clean shutdown.")
         return session_id
+    finally:
+        shutdown_axl_nodes()
 
     if winning_side is None:
         winning_side = "draw"
-        bull_score, bear_score = _read_onchain_scores()
-        update_debate_session(
-            session_id,
-            status=STATE_DEBATE_ENDED,
-            total_rounds=max_rounds,
-            winning_side=winning_side,
-            final_bull_score=int(bull_score),
-            final_bear_score=int(bear_score),
-            end_time=_utcnow(),
-        )
+        final_scores = _read_onchain_scores()
 
-    trigger_settlement(session_id, winning_side)
+    execute_final_settlement(session_id, winning_side, final_scores, DRY_RUN)
     return session_id
 
 
 if __name__ == "__main__":
-    env_round_interval_seconds = int(os.getenv("ROUND_INTERVAL_SECONDS", "60"))
-    env_win_threshold = int(os.getenv("CONVICTION_WIN_THRESHOLD", "70"))
+    env_win_threshold = WIN_THRESHOLD
     env_max_debate_rounds = int(os.getenv("MAX_DEBATE_ROUNDS", "20"))
-    env_min_stake_eth = float(os.getenv("MIN_STAKE_ETH", "0.001"))
+    env_min_stake_eth = MIN_STAKE_ETH
+
+    if REQUESTED_DURATION:
+        env_max_debate_rounds = parse_duration(REQUESTED_DURATION, ROUND_INTERVAL_SECONDS)
 
     print(
         "[ORCHESTRATOR] Loaded config | "
-        f"ROUND_INTERVAL_SECONDS={env_round_interval_seconds} | "
+        f"ROUND_INTERVAL_SECONDS={ROUND_INTERVAL_SECONDS} | "
         f"CONVICTION_WIN_THRESHOLD={env_win_threshold} | "
         f"MAX_DEBATE_ROUNDS={env_max_debate_rounds} | "
         f"MIN_STAKE_ETH={env_min_stake_eth}"
     )
 
-    # Dry-run entrypoint config requested for demo validation.
-    session_id = run_debate("ETH/USDC", max_rounds=5, round_interval_seconds=30)
-    print(f"[ORCHESTRATOR] Dry run complete. session_id={session_id}")
+    session_id = run_debate(TOKEN_PAIR, max_rounds=env_max_debate_rounds, round_interval_seconds=ROUND_INTERVAL_SECONDS)
+    print(f"[ORCHESTRATOR] Run complete. session_id={session_id}")

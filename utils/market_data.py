@@ -14,6 +14,14 @@ from web3 import Web3
 
 from utils.db_manager import init_database
 
+DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def set_dry_run(value: bool) -> None:
+    global DRY_RUN
+    DRY_RUN = bool(value)
+    os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
+
 
 SLOT0_ABI = [
     {

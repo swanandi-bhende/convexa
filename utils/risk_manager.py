@@ -21,6 +21,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from utils.db.schema import Base, SafetyEvent, ConvictionHistory, AXLMessageAudit, GasPriceHistory
 
+DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def set_dry_run(value: bool) -> None:
+    global DRY_RUN
+    DRY_RUN = bool(value)
+    os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
+
 
 @dataclass
 class RiskDecision:
@@ -142,6 +150,9 @@ class RiskManager:
         Returns:
             RiskDecision with action PROCEED, PAUSE, SKIP_ROUND, or HALT
         """
+        if DRY_RUN:
+            return RiskDecision(action="PROCEED", reason="dry_run_skips_freshness_gate")
+
         data_freshness_seconds = market_snapshot.get("data_freshness_seconds", None)
         
         # If no freshness info, assume data is acceptable
@@ -238,20 +249,33 @@ class RiskManager:
                 ConvictionHistory.session_id == session_id,
                 ConvictionHistory.round_number == round_number - 1,
             ).first()
+
+            current_record = db.query(ConvictionHistory).filter(
+                ConvictionHistory.session_id == session_id,
+                ConvictionHistory.round_number == round_number,
+            ).first()
             
             # Round 1: no previous scores to compare, just record and proceed
             if previous_record is None:
-                new_record = ConvictionHistory(
-                    session_id=session_id,
-                    round_number=round_number,
-                    bull_score=new_bull_score,
-                    bear_score=new_bear_score,
-                    delta_from_previous_bull=None,
-                    delta_from_previous_bear=None,
-                    drift_flagged=False,
-                    timestamp=datetime.utcnow(),
-                )
-                db.add(new_record)
+                if current_record is None:
+                    current_record = ConvictionHistory(
+                        session_id=session_id,
+                        round_number=round_number,
+                        bull_score=new_bull_score,
+                        bear_score=new_bear_score,
+                        delta_from_previous_bull=None,
+                        delta_from_previous_bear=None,
+                        drift_flagged=False,
+                        timestamp=datetime.utcnow(),
+                    )
+                    db.add(current_record)
+                else:
+                    current_record.bull_score = new_bull_score
+                    current_record.bear_score = new_bear_score
+                    current_record.delta_from_previous_bull = None
+                    current_record.delta_from_previous_bear = None
+                    current_record.drift_flagged = False
+                    current_record.timestamp = datetime.utcnow()
                 db.commit()
                 return RiskDecision(action="PROCEED", reason=None)
             
@@ -264,17 +288,25 @@ class RiskManager:
                            bear_delta >= self.EXTENDED_REASONING_REQUIRED_DRIFT)
             
             # Record this round's conviction in history
-            new_record = ConvictionHistory(
-                session_id=session_id,
-                round_number=round_number,
-                bull_score=new_bull_score,
-                bear_score=new_bear_score,
-                delta_from_previous_bull=int(bull_delta),
-                delta_from_previous_bear=int(bear_delta),
-                drift_flagged=drift_flagged,
-                timestamp=datetime.utcnow(),
-            )
-            db.add(new_record)
+            if current_record is None:
+                current_record = ConvictionHistory(
+                    session_id=session_id,
+                    round_number=round_number,
+                    bull_score=new_bull_score,
+                    bear_score=new_bear_score,
+                    delta_from_previous_bull=int(bull_delta),
+                    delta_from_previous_bear=int(bear_delta),
+                    drift_flagged=drift_flagged,
+                    timestamp=datetime.utcnow(),
+                )
+                db.add(current_record)
+            else:
+                current_record.bull_score = new_bull_score
+                current_record.bear_score = new_bear_score
+                current_record.delta_from_previous_bull = int(bull_delta)
+                current_record.delta_from_previous_bear = int(bear_delta)
+                current_record.drift_flagged = drift_flagged
+                current_record.timestamp = datetime.utcnow()
             db.commit()
             
             # Check if drift exceeds hard limit (pause threshold)
@@ -486,37 +518,24 @@ class RiskManager:
             RiskDecision with HALT if either side has zero stake, WARNING if imbalanced
         """
         session_id = session_id or self.session_id
-        
-        if not self.web3:
-            print(f"⚠️  Warning: Web3 not initialized, skipping stake validation")
+
+        if DRY_RUN:
             return RiskDecision(action="PROCEED", reason=None)
-        
+
         try:
-            # Fetch stake info from DebateEscrow contract
-            # In production, parse ABI and call contract.functions.getStakeInfo().call()
-            # For now, placeholder that shows the structure
-            bull_stake_wei = 0
-            bear_stake_wei = 0
-            
-            # Try to read from contract if available
-            try:
-                from agents.orchestrator import _get_web3_and_conviction_contract
-                web3, conviction_contract = _get_web3_and_conviction_contract()
-                if conviction_contract:
-                    # Placeholder: actual contract call would be here
-                    # result = conviction_contract.functions.getStakeInfo().call()
-                    # bull_stake_wei = result[0]
-                    # bear_stake_wei = result[1]
-                    pass
-            except Exception:
-                pass
+            from agents.orchestrator import _get_debate_escrow_contract
+
+            _web3, escrow_contract = _get_debate_escrow_contract()
+            if escrow_contract is None:
+                return RiskDecision(action="PROCEED", reason=None)
+
+            bull_stake_wei, bear_stake_wei, _is_active = escrow_contract.functions.getStakeInfo().call()
             
             # Convert from wei to ETH (wei / 10^18)
             bull_stake_eth = bull_stake_wei / 1e18
             bear_stake_eth = bear_stake_wei / 1e18
             
-            # Check for zero stake
-            if bull_stake_eth == 0:
+            if bull_stake_eth < self.MIN_STAKE_EACH_SIDE_ETH:
                 self._log_safety_event(
                     round_number=round_number,
                     event_type="low_stake",
@@ -526,15 +545,15 @@ class RiskManager:
                         "bear_stake_eth": bear_stake_eth,
                         "min_required": self.MIN_STAKE_EACH_SIDE_ETH,
                     },
-                    action_taken="zero_stake_on_bull_side",
+                    action_taken="below_minimum_stake_on_bull_side",
                 )
                 return RiskDecision(
                     action="HALT",
-                    reason="zero_stake_on_one_side",
+                    reason="insufficient_stake_on_one_side",
                     context={"side": "bull", "stake": bull_stake_eth},
                 )
             
-            if bear_stake_eth == 0:
+            if bear_stake_eth < self.MIN_STAKE_EACH_SIDE_ETH:
                 self._log_safety_event(
                     round_number=round_number,
                     event_type="low_stake",
@@ -544,20 +563,19 @@ class RiskManager:
                         "bear_stake_eth": bear_stake_eth,
                         "min_required": self.MIN_STAKE_EACH_SIDE_ETH,
                     },
-                    action_taken="zero_stake_on_bear_side",
+                    action_taken="below_minimum_stake_on_bear_side",
                 )
                 return RiskDecision(
                     action="HALT",
-                    reason="zero_stake_on_one_side",
+                    reason="insufficient_stake_on_one_side",
                     context={"side": "bear", "stake": bear_stake_eth},
                 )
-            
-            # Check minimum threshold
+
             if bull_stake_eth < self.MIN_STAKE_EACH_SIDE_ETH or bear_stake_eth < self.MIN_STAKE_EACH_SIDE_ETH:
                 self._log_safety_event(
                     round_number=round_number,
                     event_type="low_stake",
-                    severity="warning",
+                    severity="halt",
                     details={
                         "bull_stake_eth": bull_stake_eth,
                         "bear_stake_eth": bear_stake_eth,
@@ -565,7 +583,12 @@ class RiskManager:
                     },
                     action_taken="below_minimum_stake",
                 )
-            
+                return RiskDecision(
+                    action="HALT",
+                    reason="insufficient_stake",
+                    context={"bull_stake_eth": bull_stake_eth, "bear_stake_eth": bear_stake_eth},
+                )
+
             # Check for severe imbalance (10:1 ratio)
             if bull_stake_eth > 0 and bear_stake_eth > 0:
                 ratio = max(bull_stake_eth / bear_stake_eth, bear_stake_eth / bull_stake_eth)

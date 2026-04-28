@@ -38,6 +38,7 @@ from utils.db_manager import (
 )
 from utils.market_data import MarketSnapshot, fetch_snapshot
 from utils.db.schema import ArgumentPerformance
+from utils.risk_manager import RiskManager
 import statistics
 
 # Judge architecture map (must be explicit before implementation):
@@ -134,6 +135,14 @@ BEAR_AXL_PEER_ID = os.getenv(
 JUDGE_AXL_SEND_URL = f"{JUDGE_AXL_HTTP_URL}/send"
 
 load_dotenv()
+DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def set_dry_run(value: bool) -> None:
+    global DRY_RUN
+    DRY_RUN = bool(value)
+    os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
+
 
 _init_parser = JsonOutputParser(pydantic_object=JudgeVerdictOutput)
 JUDGE_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages(
@@ -253,6 +262,33 @@ def wait_for_both_arguments(round_number: int, timeout_seconds: int = 120) -> tu
 
     Returns ({"bull": <msg|None>, "bear": <msg|None>}, timed_out).
     """
+    if DRY_RUN:
+        synthetic_bull = {
+            "sender": "bull",
+            "sender_peer_id": BULL_AXL_PEER_ID,
+            "round": round_number,
+            "argument": {
+                "argument": f"Round {round_number}: dry-run bullish argument generated locally.",
+                "confidence": 55,
+                "keyMetrics": ["dry_run=true", f"round={round_number}"],
+            },
+            "message_hash": f"dry-run-bull-{round_number}",
+            "signature": f"dry-run-signature-bull-{round_number}",
+        }
+        synthetic_bear = {
+            "sender": "bear",
+            "sender_peer_id": BEAR_AXL_PEER_ID,
+            "round": round_number,
+            "argument": {
+                "argument": f"Round {round_number}: dry-run bearish argument generated locally.",
+                "confidence": 55,
+                "keyMetrics": ["dry_run=true", f"round={round_number}"],
+            },
+            "message_hash": f"dry-run-bear-{round_number}",
+            "signature": f"dry-run-signature-bear-{round_number}",
+        }
+        return {"bull": synthetic_bull, "bear": synthetic_bear}, False
+
     started_at = time.monotonic()
     bucket: dict[str, dict[str, Any] | None] = {"bull": None, "bear": None}
 
@@ -538,7 +574,18 @@ def _post_verdict_to_destination(verdict_dict: dict[str, Any], destination_peer_
         return False
 
 
-def _update_conviction_onchain(verdict_dict: dict[str, Any], round_number: int) -> tuple[bool, str]:
+def _update_conviction_onchain(verdict_dict: dict[str, Any], round_number: int, session_id: str) -> tuple[bool, str]:
+    if DRY_RUN:
+        from utils.dry_run_adapter import DryRunAdapter
+
+        adapter = DryRunAdapter(session_id=session_id, round_number=round_number)
+        result = adapter.simulate_contract_call(
+            "ConvictionTracker",
+            "updateConviction",
+            {"session_id": session_id, "round_number": round_number, "verdict": verdict_dict},
+        )
+        return bool(result.get("success")), str(result.get("tx_hash") or "simulated-tx-hash")
+
     rpc_url = os.getenv("ALCHEMY_RPC_URL") or os.getenv("MARKET_DATA_RPC_URL")
     contract_address = os.getenv("CONVICTION_CONTRACT_ADDRESS")
     key_candidates = [
@@ -608,11 +655,11 @@ def _update_conviction_onchain(verdict_dict: dict[str, Any], round_number: int) 
         return False, f"failed:{type(exc).__name__}"
 
 
-def publish_verdict(verdict_dict: dict[str, Any], round_number: int) -> dict[str, Any]:
+def publish_verdict(verdict_dict: dict[str, Any], round_number: int, session_id: str) -> dict[str, Any]:
     """Publish verdict to both agents, then attempt ConvictionTracker update onchain."""
     bull_sent = _post_verdict_to_destination(verdict_dict, BULL_AXL_PEER_ID, "bull", round_number)
     bear_sent = _post_verdict_to_destination(verdict_dict, BEAR_AXL_PEER_ID, "bear", round_number)
-    onchain_ok, tx_or_status = _update_conviction_onchain(verdict_dict, round_number)
+    onchain_ok, tx_or_status = _update_conviction_onchain(verdict_dict, round_number, session_id)
 
     return {
         "bull_publish_status": "sent" if bull_sent else "failed",
@@ -623,11 +670,22 @@ def publish_verdict(verdict_dict: dict[str, Any], round_number: int) -> dict[str
     }
 
 
-def run_judge_round(round_number: int, token_pair: str) -> dict[str, Any]:
+def run_judge_round(session_id: str, round_number: int, token_pair: str) -> dict[str, Any]:
     """Execute one full Judge cycle: wait, score, publish, persist, and summarize."""
     init_database()
+    risk_manager = RiskManager(session_id)
 
     message_bucket, timed_out = wait_for_both_arguments(round_number)
+
+    for expected_sender in ("bull", "bear"):
+        message = message_bucket.get(expected_sender)
+        if message is None:
+            continue
+        validation_decision = risk_manager.validate_axl_message(message, expected_sender, round_number, session_id)
+        if validation_decision.action != "PROCEED":
+            if not DRY_RUN:
+                print(f"[JUDGE] AXL validation warning for {expected_sender}: {validation_decision.reason}")
+
     bull_argument_dict, bull_fallback_used = _extract_argument_from_message(message_bucket.get("bull"), "bull")
     bear_argument_dict, bear_fallback_used = _extract_argument_from_message(message_bucket.get("bear"), "bear")
 
@@ -662,7 +720,7 @@ def run_judge_round(round_number: int, token_pair: str) -> dict[str, Any]:
         market_snapshot=snapshot,
     )
 
-    publish_result = publish_verdict(verdict, round_number)
+    publish_result = publish_verdict(verdict, round_number, session_id)
 
     persisted_winner = verdict.get("winner")
     if persisted_winner not in {"bull", "bear"}:
@@ -726,5 +784,5 @@ if __name__ == "__main__":
     load_dotenv()
     round_number = int(os.getenv("JUDGE_TEST_ROUND", "1"))
     token_pair = os.getenv("TOKEN_PAIR", "ETH/USDC")
-    result = run_judge_round(round_number=round_number, token_pair=token_pair)
+    result = run_judge_round(session_id=os.getenv("DEBATE_SESSION_ID", "default-session"), round_number=round_number, token_pair=token_pair)
     print(json.dumps(result, indent=2, default=str))

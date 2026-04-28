@@ -64,7 +64,13 @@ UNISWAP_UNIVERSAL_ROUTER_VERSION = os.getenv("UNISWAP_UNIVERSAL_ROUTER_VERSION",
 UNISWAP_PERMIT2_DISABLED = _env_bool("UNISWAP_PERMIT2_DISABLED", True)
 SWAP_CHAIN_ID = int(os.getenv("SWAP_CHAIN_ID", str(TARGET_CHAIN_ID)))
 QUOTE_TIMEOUT_SECONDS = float(os.getenv("QUOTE_TIMEOUT_SECONDS", "10"))
-DRY_RUN = _env_bool("DRY_RUN", True)
+DRY_RUN = _env_bool("DRY_RUN", False)
+
+
+def set_dry_run(value: bool) -> None:
+    global DRY_RUN
+    DRY_RUN = bool(value)
+    os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
 FINAL_SETTLEMENT_SLIPPAGE_TOLERANCE = float(os.getenv("FINAL_SETTLEMENT_SLIPPAGE_TOLERANCE", "1.0"))
 FINAL_SETTLEMENT_SPLIT_THRESHOLD_ETH = float(os.getenv("FINAL_SETTLEMENT_SPLIT_THRESHOLD_ETH", "0.1"))
 MICRO_SETTLEMENT_MIN_ETH_EQUIVALENT = float(os.getenv("MICRO_SETTLEMENT_MIN_ETH_EQUIVALENT", "0.001"))
@@ -452,6 +458,89 @@ def fetch_quote(
     token_out_symbol = token_out.upper() if not token_out.startswith("0x") else token_out
     slippage_pct = float(slippage_tolerance if slippage_tolerance is not None else DEFAULT_SLIPPAGE_TOLERANCE)
 
+    if DRY_RUN:
+        token_in_address = resolve_token_address(token_in, SWAP_CHAIN_ID)
+        token_out_address = resolve_token_address(token_out, SWAP_CHAIN_ID)
+        quote_timestamp = _now_utc_naive()
+        amount_in_int = int(amount_in_wei)
+        quoted_amount_out_wei = str(max(1, int(amount_in_int * 97 // 100)))
+        raw_response = {
+            "quote": {
+                "output": {"amount": quoted_amount_out_wei},
+                "route": [],
+                "routeString": "dry_run_simulated_route",
+                "gasFee": "0",
+            }
+        }
+
+        in_dec, out_dec = _extract_decimals_from_quote(
+            QuoteResult(
+                success=True,
+                reason=None,
+                quote_id=None,
+                session_id=session_id,
+                round_number=round_number,
+                swap_type=swap_type,
+                token_in=token_in_address,
+                token_out=token_out_address,
+                token_in_symbol=token_in_symbol,
+                token_out_symbol=token_out_symbol,
+                amount_in_wei=str(amount_in_wei),
+                quoted_amount_out_wei=quoted_amount_out_wei,
+                quoted_price=None,
+                route_description="dry_run_simulated_route",
+                gas_estimate_wei="0",
+                slippage_tolerance_percent=slippage_pct,
+                quote_timestamp=quote_timestamp,
+                quote_used=False,
+                raw_response=raw_response,
+            )
+        )
+        quoted_price = _calculate_normalized_price(
+            str(amount_in_wei),
+            quoted_amount_out_wei,
+            in_dec,
+            out_dec,
+        )
+
+        quote_id = _insert_quote_row(
+            session_id=session_id,
+            round_number=round_number,
+            swap_type=swap_type,
+            token_in=token_in_address,
+            token_out=token_out_address,
+            amount_in_wei=str(amount_in_wei),
+            quoted_amount_out_wei=quoted_amount_out_wei,
+            route_description="dry_run_simulated_route",
+            gas_estimate_wei="0",
+            quote_timestamp=quote_timestamp,
+            quote_used=False,
+            quoted_price=quoted_price,
+            slippage_tolerance_percent=slippage_pct,
+        )
+
+        return QuoteResult(
+            success=True,
+            reason=None,
+            quote_id=quote_id,
+            session_id=session_id,
+            round_number=round_number,
+            swap_type=swap_type,
+            token_in=token_in_address,
+            token_out=token_out_address,
+            token_in_symbol=token_in_symbol,
+            token_out_symbol=token_out_symbol,
+            amount_in_wei=str(amount_in_wei),
+            quoted_amount_out_wei=quoted_amount_out_wei,
+            quoted_price=quoted_price,
+            route_description="dry_run_simulated_route",
+            gas_estimate_wei="0",
+            slippage_tolerance_percent=slippage_pct,
+            quote_timestamp=quote_timestamp,
+            quote_used=False,
+            raw_response=raw_response,
+        )
+
     try:
         token_in_address = resolve_token_address(token_in, SWAP_CHAIN_ID)
         token_out_address = resolve_token_address(token_out, SWAP_CHAIN_ID)
@@ -690,6 +779,21 @@ def build_swap_calldata(quote_result: QuoteResult) -> SwapCalldata:
             raw_response=quote_result.raw_response,
         )
 
+    if DRY_RUN:
+        now = int(time.time())
+        deadline_unix = now + SWAP_DEADLINE_SECONDS
+        return SwapCalldata(
+            success=True,
+            reason=None,
+            quote_id=quote_result.quote_id,
+            calldata=f"0xdeadbeef{quote_result.quote_id or 0:08x}",
+            value_wei="0",
+            gas_limit="250000",
+            gas_price_wei="0",
+            deadline_unix=deadline_unix,
+            raw_response={"dry_run": True, "quote": quote_result.raw_response.get("quote")},
+        )
+
     now = int(time.time())
     quote_age_seconds = int((_now_utc_naive() - quote_result.quote_timestamp).total_seconds())
     if quote_age_seconds >= max(SWAP_DEADLINE_SECONDS - 30, 1):
@@ -860,27 +964,26 @@ def broadcast_and_confirm(
 
     execution_id: int | None = None
     if DRY_RUN:
-        simulated_hash = Web3.keccak(text=json.dumps(tx_dict, sort_keys=True)).hex()
-        execution_id = _insert_execution_row(
-            session_id=session_id,
-            round_number=round_number,
-            swap_type=swap_type,
-            quote_id=swap_calldata.quote_id,
-            tx_hash=simulated_hash,
-            token_in=(swap_calldata.raw_response or {}).get("quote", {}).get("input", {}).get("token", ""),
-            token_out=(swap_calldata.raw_response or {}).get("quote", {}).get("output", {}).get("token", ""),
-            amount_in_actual_wei=(swap_calldata.raw_response or {}).get("quote", {}).get("input", {}).get("amount"),
-            status="pending",
-            gas_price_gwei=gas_price_wei / 1e9,
-            error_message="dry_run_no_broadcast",
+        from utils.dry_run_adapter import DryRunAdapter
+
+        adapter = DryRunAdapter(session_id=session_id, round_number=round_number)
+        simulated = adapter.simulate_uniswap_swap(
+            {
+                "session_id": session_id,
+                "round_number": round_number,
+                "swap_type": swap_type,
+                "quote_result": swap_calldata.raw_response.get("quote", {}) if swap_calldata.raw_response else {},
+                "quote_id": swap_calldata.quote_id,
+                "amount_in_wei": (swap_calldata.raw_response or {}).get("quote", {}).get("input", {}).get("amount"),
+                "quoted_amount_out_wei": (swap_calldata.raw_response or {}).get("quote", {}).get("output", {}).get("amount"),
+                "quoted_price": (swap_calldata.raw_response or {}).get("quote", {}).get("quotedPrice"),
+                "token_in": (swap_calldata.raw_response or {}).get("quote", {}).get("input", {}).get("token", ""),
+                "token_out": (swap_calldata.raw_response or {}).get("quote", {}).get("output", {}).get("token", ""),
+                "gas_price_gwei": gas_price_wei / 1e9,
+            }
         )
-        _update_execution_row(
-            execution_id,
-            status="confirmed",
-            gas_used_wei="0",
-            confirmed_at=_now_utc_naive(),
-            error_message="dry_run_simulated_confirmation",
-        )
+        execution_id = simulated.get("execution_id")
+        simulated_hash = str(simulated.get("tx_hash") or Web3.keccak(text=json.dumps(tx_dict, sort_keys=True)).hex())
         print("[DRY_RUN] broadcast_and_confirm would send transaction:")
         print(json.dumps(tx_dict, indent=2, default=str))
         return BroadcastResult(
@@ -1237,7 +1340,7 @@ def execute_micro_settlement(
     return SettlementResult(True, "confirmed", result.get("tx_hash"), result.get("job_id"), None)
 
 
-def execute_final_settlement(session_id: str, winning_side: str) -> dict[str, Any]:
+def execute_final_settlement(session_id: str, winning_side: str, call_settle_side: bool = True) -> dict[str, Any]:
     """Run final settlement swaps (optionally split) and call settleSide on DebateEscrow."""
     init_database()
     losing_side = "bear" if winning_side.strip().lower() == "bull" else "bull"
@@ -1249,6 +1352,8 @@ def execute_final_settlement(session_id: str, winning_side: str) -> dict[str, An
 
     threshold_units = _eth_threshold_to_base_units(token_in_symbol, FINAL_SETTLEMENT_SPLIT_THRESHOLD_ETH)
     should_split = total_losing_wei > threshold_units
+    if DRY_RUN:
+        should_split = False
 
     tranche_amounts: list[int]
     if should_split:
@@ -1356,7 +1461,16 @@ def execute_final_settlement(session_id: str, winning_side: str) -> dict[str, An
             tranche_hashes.append(result.get("tx_hash") or f"keeperhub_job:{result.get('job_id')}")
             tranche_job_ids.append(result.get("job_id"))
             tranche_in.append(int(tranche))
-            tranche_out.append(int(result.get("analysis").amount_out_actual_wei) if result.get("analysis") and hasattr(result.get("analysis"), "amount_out_actual_wei") else 0)
+            analysis = result.get("analysis")
+            amount_out_actual_wei = None
+            if analysis is not None:
+                amount_out_actual_wei = getattr(analysis, "amount_out_actual_wei", None)
+                if amount_out_actual_wei is None and isinstance(analysis, dict):
+                    amount_out_actual_wei = analysis.get("amount_out_actual_wei")
+            try:
+                tranche_out.append(int(amount_out_actual_wei) if amount_out_actual_wei is not None else 0)
+            except (TypeError, ValueError):
+                tranche_out.append(0)
             tranche_gas_used.append(0)
 
         if idx < len(tranche_amounts) - 1:
@@ -1366,32 +1480,41 @@ def execute_final_settlement(session_id: str, winning_side: str) -> dict[str, An
                 time.sleep(30)
 
     settle_tx_hash: str | None = None
-    try:
-        side_enum = 0 if winning_side.strip().lower() == "bull" else 1
-        tx = escrow_contract.functions.settleSide(side_enum).build_transaction(
-            {
-                "from": Web3.to_checksum_address(AGENT_WALLET_ADDRESS),
-                "nonce": int(web3_client.eth.get_transaction_count(Web3.to_checksum_address(AGENT_WALLET_ADDRESS))),
-                "chainId": int(web3_client.eth.chain_id),
-                "gas": int(os.getenv("ESCROW_SETTLE_GAS_LIMIT", "400000")),
-                "gasPrice": int(web3_client.eth.gas_price),
-                "value": 0,
-            }
-        )
+    if call_settle_side:
+        try:
+            side_enum = 0 if winning_side.strip().lower() == "bull" else 1
+            tx = escrow_contract.functions.settleSide(side_enum).build_transaction(
+                {
+                    "from": Web3.to_checksum_address(AGENT_WALLET_ADDRESS),
+                    "nonce": int(web3_client.eth.get_transaction_count(Web3.to_checksum_address(AGENT_WALLET_ADDRESS))),
+                    "chainId": int(web3_client.eth.chain_id),
+                    "gas": int(os.getenv("ESCROW_SETTLE_GAS_LIMIT", "400000")),
+                    "gasPrice": int(web3_client.eth.gas_price),
+                    "value": 0,
+                }
+            )
 
-        if DRY_RUN:
-            settle_tx_hash = Web3.keccak(text=json.dumps(tx, sort_keys=True, default=str)).hex()
-            print("[DRY_RUN] settleSide transaction prepared")
-        else:
-            signed = web3_client.eth.account.sign_transaction(tx, private_key=AGENT_WALLET_PRIVATE_KEY)
-            sent_hash = web3_client.eth.send_raw_transaction(signed.raw_transaction)
-            settle_tx_hash = sent_hash.hex()
-    except Exception as exc:  # pragma: no cover
-        return {
-            "success": False,
-            "reason": f"settle_side_failed:{exc}",
-            "tx_hashes": tranche_hashes,
-        }
+            if DRY_RUN:
+                from utils.dry_run_adapter import DryRunAdapter
+
+                adapter = DryRunAdapter(session_id=session_id, round_number=round_number)
+                result = adapter.simulate_contract_call(
+                    "DebateEscrow",
+                    "settleSide",
+                    {"session_id": session_id, "round_number": round_number, "winning_side": winning_side, "tx": tx},
+                )
+                settle_tx_hash = str(result.get("tx_hash") or Web3.keccak(text=json.dumps(tx, sort_keys=True, default=str)).hex())
+                print("[DRY_RUN] settleSide transaction prepared")
+            else:
+                signed = web3_client.eth.account.sign_transaction(tx, private_key=AGENT_WALLET_PRIVATE_KEY)
+                sent_hash = web3_client.eth.send_raw_transaction(signed.raw_transaction)
+                settle_tx_hash = sent_hash.hex()
+        except Exception as exc:  # pragma: no cover
+            return {
+                "success": False,
+                "reason": f"settle_side_failed:{exc}",
+                "tx_hashes": tranche_hashes,
+            }
 
     total_in = sum(tranche_in)
     total_out = sum(tranche_out)

@@ -22,6 +22,13 @@ from utils.db.schema import (
 
 
 DEFAULT_DATABASE_URL = "sqlite:///./utils/db/debate.db"
+DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def set_dry_run(value: bool) -> None:
+    global DRY_RUN
+    DRY_RUN = bool(value)
+    os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
 
 
 def _resolve_database_url() -> str:

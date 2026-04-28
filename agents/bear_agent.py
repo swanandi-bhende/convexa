@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid5, NAMESPACE_URL
 
 import httpx
 from dotenv import load_dotenv
@@ -48,6 +49,14 @@ class BearAgentOutput(BaseModel):
 
 
 load_dotenv()
+DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def set_dry_run(value: bool) -> None:
+    global DRY_RUN
+    DRY_RUN = bool(value)
+    os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
+
 # Bear agent communicates exclusively with the Judge node via AXL. Direct Bull-Bear communication is architecturally prohibited.
 ALLOWED_DESTINATIONS = [os.getenv("JUDGE_AXL_PEER_ID", "")]
 _init_parser = JsonOutputParser(pydantic_object=BearAgentOutput)
@@ -174,6 +183,15 @@ def _post_process_argument(payload: dict[str, Any], snapshot: MarketSnapshot) ->
 
 def generate_bear_argument(market_snapshot: MarketSnapshot, round_number: int, memory: AgentMemory | None = None, weights: dict | None = None) -> dict[str, Any]:
     """Generate a validated bearish argument for one round with robust fallback behavior."""
+    if DRY_RUN:
+        fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
+        fallback["argument"] = (
+            f"Round {round_number}: dry-run bearish thesis derived from local market snapshot. "
+            f"Price change {market_snapshot.price_change_24h_percent:.2f}% and large outflows {market_snapshot.large_outflow_count} were reviewed."
+        )
+        fallback["confidence"] = 58 if market_snapshot.price_change_24h_percent >= 0 else 46
+        return _post_process_argument(fallback, market_snapshot)
+
     market_summary = format_for_bear(market_snapshot, weights=weights)
 
     # Inject recent memory context if available
@@ -205,6 +223,20 @@ def generate_bear_argument(market_snapshot: MarketSnapshot, round_number: int, m
 
 def publish_to_judge(argument_dict: dict[str, Any], round_number: int) -> bool:
     """Publish Bear round output to Judge via local AXL HTTP endpoint."""
+    payload = {
+        "sender": "bear",
+        "sender_peer_id": os.getenv("BEAR_AXL_PEER_ID", ""),
+        "round": round_number,
+        "argument": argument_dict,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    payload["message_hash"] = str(uuid5(NAMESPACE_URL, json.dumps(payload, sort_keys=True, default=str)))
+    payload["signature"] = f"bear-signature:{payload['message_hash']}"
+
+    if DRY_RUN:
+        print(f"[DRY_RUN] Bear publish_to_judge round={round_number}")
+        return True
+
     judge_peer_id = os.getenv("JUDGE_AXL_PEER_ID")
     if not judge_peer_id:
         return False
@@ -215,12 +247,6 @@ def publish_to_judge(argument_dict: dict[str, Any], round_number: int) -> bool:
 
     axl_base_url = os.getenv("BEAR_AXL_HTTP_URL", "http://localhost:8001").rstrip("/")
     axl_send_url = f"{axl_base_url}/send"
-    payload = {
-        "sender": "bear",
-        "round": round_number,
-        "argument": argument_dict,
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
 
     try:
         with httpx.Client(timeout=5.0) as client:
@@ -235,11 +261,10 @@ def publish_to_judge(argument_dict: dict[str, Any], round_number: int) -> bool:
         return False
 
 
-def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
+def run_bear_round(session_id: str, round_number: int, token_pair: str) -> dict[str, Any]:
     """Execute one complete Bear round: fetch, reason, publish, log, and summarize."""
     init_database()
 
-    session_id = os.getenv("DEBATE_SESSION_ID", "default-session")
     performance_tracker = PerformanceTracker()
     strategy_adapter = StrategyAdapter("bear", session_id, performance_tracker)
     memory = AgentMemory("bear", session_id)
@@ -323,6 +348,6 @@ def run_bear_round(round_number: int, token_pair: str) -> dict[str, Any]:
 
 if __name__ == "__main__":
     load_dotenv()
-    result = run_bear_round(round_number=1, token_pair="ETH/USDC")
+    result = run_bear_round(session_id=os.getenv("DEBATE_SESSION_ID", "default-session"), round_number=1, token_pair="ETH/USDC")
     print(json.dumps(result["argument"], indent=2))
     print(f"AXL delivery success: {result['axl_delivery_success']}")

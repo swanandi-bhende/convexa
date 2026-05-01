@@ -10,3 +10,7 @@ export { MarketSnapshot } from './MarketSnapshot';
 export { DebatePreviewCard } from './DebatePreviewCard';
 export { ConvictionTracker } from './ConvictionTracker';
 export { StatsGrid } from './StatsGrid';
+export { BullCard } from './BullCard';
+export { BearCard } from './BearCard';
+export { JudgeVerdict } from './JudgeVerdict';
+export { RoundTimer } from './RoundTimer';

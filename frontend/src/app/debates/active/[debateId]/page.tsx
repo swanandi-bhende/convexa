@@ -8,8 +8,10 @@ import {
   JudgeVerdict,
   RoundTimer,
   MarketSnapshot,
+  ConvictionVotingModal,
 } from '@/components';
 import { useRealTimeDebate } from '@/hooks/useDebate';
+import { useConvictionVote } from '@/hooks/useConviction';
 import { WebSocketMessage, DebateSessionResponse } from '@/types/api';
 
 // Mock debate data - fallback when API data unavailable
@@ -80,6 +82,8 @@ export default function DebateDetailPage({
   const { data, loading, error, connected, connectionError, refetch } =
     useRealTimeDebate(debateId);
   const [showConnectionStatus, setShowConnectionStatus] = useState(true);
+  const [votingModal, setVotingModal] = useState<'bull' | 'bear' | null>(null);
+  const { submitVote, isLoading: isVoting } = useConvictionVote(debateId, 'user-123');
 
   // Fallback to mock data if API data unavailable
   const mockData = getMockDebate(debateId);
@@ -298,11 +302,29 @@ export default function DebateDetailPage({
                 </div>
 
                 {/* Total Votes */}
-                <div className="mt-lg pt-lg border-t border-border-light text-center text-text-secondary">
+                <div className="mt-lg pt-lg border-t border-border-light text-center text-text-secondary mb-lg">
                   Combined:{' '}
                   {displayData.currentBullConviction +
                     displayData.currentBearConviction}{' '}
                   votes
+                </div>
+
+                {/* Voting Buttons */}
+                <div className="grid grid-cols-2 gap-md">
+                  <button
+                    onClick={() => setVotingModal('bull')}
+                    disabled={isVoting || displayData.status !== 'RUNNING'}
+                    className="px-md py-sm bg-bull-50 hover:bg-bull-100 text-bull-600 font-semibold rounded-md transition-colors disabled:opacity-50"
+                  >
+                    Vote Bull 📈
+                  </button>
+                  <button
+                    onClick={() => setVotingModal('bear')}
+                    disabled={isVoting || displayData.status !== 'RUNNING'}
+                    className="px-md py-sm bg-bear-50 hover:bg-bear-100 text-bear-600 font-semibold rounded-md transition-colors disabled:opacity-50"
+                  >
+                    Vote Bear 📉
+                  </button>
                 </div>
               </div>
             </div>
@@ -379,6 +401,21 @@ export default function DebateDetailPage({
             </div>
           </div>
         </>
+      )}
+
+      {/* Voting Modal */}
+      {votingModal && (
+        <ConvictionVotingModal
+          debateId={debateId}
+          isOpen={!!votingModal}
+          side={votingModal}
+          onClose={() => setVotingModal(null)}
+          onVote={async (amount: number) => {
+            await submitVote(votingModal, amount);
+            setVotingModal(null);
+          }}
+          isLoading={isVoting}
+        />
       )}
     </main>
   );

@@ -179,7 +179,7 @@ STATE_TRANSITIONS: dict[str, set[str]] = {
 }
 
 STAKE_COLLECTION_WINDOW_SECONDS = int(os.getenv("STAKE_COLLECTION_WINDOW_SECONDS", "120"))
-WIN_THRESHOLD = int(os.getenv("CONVICTION_WIN_THRESHOLD", "70"))
+WIN_THRESHOLD = int(os.getenv("DEMO_CONVICTION_WIN_THRESHOLD", os.getenv("CONVICTION_WIN_THRESHOLD", "70")))
 NEUTRAL_AGENT_ARGUMENT = {
     "argument": "Neutral fallback: agent output unavailable this round; no directional edge inferred.",
     "confidence": 50,
@@ -230,6 +230,25 @@ def _select_private_key() -> str:
     )
     if private_key is None:
         raise RuntimeError("Missing private key for orchestrator transactions")
+    return private_key
+
+
+def _select_settlement_private_key() -> str:
+    key_candidates = [
+        os.getenv("AGENT_WALLET_PRIVATE_KEY"),
+        os.getenv("ORCHESTRATOR_PRIVATE_KEY"),
+        os.getenv("DEPLOYER_PRIVATE_KEY"),
+    ]
+    private_key = next(
+        (
+            candidate
+            for candidate in key_candidates
+            if isinstance(candidate, str) and candidate.strip() and not candidate.strip().startswith("your_")
+        ),
+        None,
+    )
+    if private_key is None:
+        raise RuntimeError("Missing settlement private key for orchestrator transactions")
     return private_key
 
 
@@ -315,6 +334,7 @@ def _send_contract_tx(
     private_key: str,
     contract_function: Any,
     gas_limit_env_var: str,
+    value_wei: int = 0,
 ) -> str:
     if DRY_RUN:
         return "simulated-tx-hash"
@@ -338,6 +358,7 @@ def _send_contract_tx(
             "chainId": chain_id,
             "gas": int(os.getenv(gas_limit_env_var, "350000")),
             "gasPrice": int(web3.eth.gas_price),
+            "value": int(value_wei),
         }
     )
     signed = web3.eth.account.sign_transaction(tx, private_key=private_key)
@@ -347,6 +368,56 @@ def _send_contract_tx(
     if int(receipt.status) != 1:
         raise RuntimeError(f"Transaction reverted: {tx_hash.hex()}")
     return tx_hash.hex()
+
+
+def _seed_stake_deposits(web3: Web3, escrow_contract: Any) -> dict[str, str]:
+    if DRY_RUN:
+        return {"bull_deposit_tx_hash": "simulated-bull-deposit", "bear_deposit_tx_hash": "simulated-bear-deposit"}
+
+    bull_private_key = os.getenv("BULL_STAKER_PRIVATE_KEY", "").strip()
+    bear_private_key = os.getenv("BEAR_STAKER_PRIVATE_KEY", "").strip()
+    if not bull_private_key or not bear_private_key:
+        raise RuntimeError("Missing bull or bear staker private key for stake seeding")
+
+    target_deposit_eth = float(os.getenv("DEMO_AUTO_STAKE_DEPOSIT_ETH", os.getenv("AUTO_STAKE_DEPOSIT_ETH", "0.1")))
+    target_deposit_wei = int(web3.to_wei(target_deposit_eth, "ether"))
+    gas_limit = int(os.getenv("ESCROW_DEPOSIT_GAS_LIMIT", "150000"))
+    gas_price = int(web3.eth.gas_price)
+    gas_budget_wei = gas_limit * gas_price
+    bull_stake_wei, bear_stake_wei, _ = escrow_contract.functions.getStakeInfo().call()
+
+    # Check if wallets have enough balance for minimum deposits
+    bull_account = web3.eth.account.from_key(bull_private_key)
+    bear_account = web3.eth.account.from_key(bear_private_key)
+    bull_balance = int(web3.eth.get_balance(bull_account.address))
+    bear_balance = int(web3.eth.get_balance(bear_account.address))
+    total_needed = target_deposit_wei + gas_budget_wei
+
+    if bull_balance < total_needed:
+        print(f"[STAKE WINDOW] bull wallet has {bull_balance / 1e18:.6f} ETH, insufficient for deposit (need {total_needed / 1e18:.6f} ETH), skipping")
+    if bear_balance < total_needed:
+        print(f"[STAKE WINDOW] bear wallet has {bear_balance / 1e18:.6f} ETH, insufficient for deposit (need {total_needed / 1e18:.6f} ETH), skipping")
+
+    tx_hashes: dict[str, str] = {}
+    if int(bull_stake_wei) < target_deposit_wei and bull_balance >= total_needed:
+        tx_hashes["bull_deposit_tx_hash"] = _send_contract_tx(
+            web3=web3,
+            private_key=bull_private_key,
+            contract_function=escrow_contract.functions.deposit(0),
+            gas_limit_env_var="ESCROW_DEPOSIT_GAS_LIMIT",
+            value_wei=target_deposit_wei,
+        )
+
+    if int(bear_stake_wei) < target_deposit_wei and bear_balance >= total_needed:
+        tx_hashes["bear_deposit_tx_hash"] = _send_contract_tx(
+            web3=web3,
+            private_key=bear_private_key,
+            contract_function=escrow_contract.functions.deposit(1),
+            gas_limit_env_var="ESCROW_DEPOSIT_GAS_LIMIT",
+            value_wei=target_deposit_wei,
+        )
+
+    return tx_hashes
 
 
 def _coerce_snapshot_payload(snapshot: Any) -> dict[str, Any]:
@@ -818,6 +889,96 @@ def shutdown_axl_nodes() -> None:
 atexit.register(shutdown_axl_nodes)
 
 
+def _redeploy_contracts() -> tuple[str, str]:
+    """
+    Redeploy a fresh ConvictionTracker contract to recover from settlement.
+    Returns tuple of (escrow_address, conviction_address).
+    """
+    print("[ORCHESTRATOR] Detected settled contract; redeploying fresh instances...")
+    
+    contracts_dir = PROJECT_ROOT / "contracts"
+    escrow_addr = os.getenv("ESCROW_CONTRACT_ADDRESS")
+    if not escrow_addr:
+        raise RuntimeError("Missing ESCROW_CONTRACT_ADDRESS for redeploy recovery")
+
+    print(f"[REDEPLOY] Keeping existing DebateEscrow: {escrow_addr}")
+
+    # Deploy ConvictionTracker
+    print("[REDEPLOY] Deploying fresh ConvictionTracker (may take several minutes)...")
+    conviction_cmd = [
+        "npx", "hardhat", "ignition", "deploy",
+        "ignition/modules/ConvictionTracker.ts",
+        "--network", "unichainSepolia",
+        "--reset"
+    ]
+    try:
+        print(f"[REDEPLOY] Running: {' '.join(conviction_cmd)}")
+        conviction_result = subprocess.run(
+            conviction_cmd,
+            cwd=str(contracts_dir),
+            capture_output=True,
+            text=True,
+            input="y\ny\n",
+            timeout=1200,
+            env={**os.environ, "DEPLOYER_PRIVATE_KEY": os.getenv("DEPLOYER_PRIVATE_KEY", "")}
+        )
+        if conviction_result.returncode != 0:
+            raise RuntimeError(f"ConvictionTracker deployment failed:\n{conviction_result.stderr}")
+        conviction_output = conviction_result.stdout + conviction_result.stderr
+        conviction_addr = _load_ignition_deployed_address(contracts_dir, "ConvictionTrackerModule#ConvictionTracker")
+        if not conviction_addr:
+            conviction_addr = _extract_contract_address(conviction_output, "ConvictionTracker")
+        print(f"[REDEPLOY] ConvictionTracker deployment completed")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ConvictionTracker deployment timed out after 1200s (20 minutes). Check contracts compilation.")
+    except Exception as exc:
+        raise RuntimeError(f"ConvictionTracker deployment failed: {exc}")
+    
+    if not escrow_addr or not conviction_addr:
+        raise RuntimeError(f"Failed to extract addresses from deployment output")
+    
+    # Update environment with new addresses
+    os.environ["ESCROW_CONTRACT_ADDRESS"] = escrow_addr
+    os.environ["CONVICTION_CONTRACT_ADDRESS"] = conviction_addr
+    
+    print(f"[REDEPLOY] Fresh contracts deployed:")
+    print(f"  DebateEscrow: {escrow_addr}")
+    print(f"  ConvictionTracker: {conviction_addr}")
+    
+    return escrow_addr, conviction_addr
+
+
+def _extract_contract_address(output: str, contract_name: str) -> str | None:
+    """
+    Extract contract address from hardhat deployment output.
+    Looks for lines like: "✔ Executed ModuleName#ContractName - at address 0x..."
+    """
+    lines = output.split("\n")
+    fallback_address = None
+    for line in lines:
+        match = re.search(r"0x[a-fA-F0-9]{40}", line)
+        if match:
+            fallback_address = match.group(0)
+            if contract_name in line:
+                return fallback_address
+    return fallback_address
+
+
+def _load_ignition_deployed_address(contracts_dir: Path, contract_key: str) -> str | None:
+    deployment_file = contracts_dir / "ignition" / "deployments" / "chain-1301" / "deployed_addresses.json"
+    if not deployment_file.exists():
+        return None
+
+    try:
+        with deployment_file.open("r", encoding="utf-8") as handle:
+            deployed_addresses = json.load(handle)
+    except Exception:
+        return None
+
+    address = deployed_addresses.get(contract_key)
+    return address if isinstance(address, str) and re.fullmatch(r"0x[a-fA-F0-9]{40}", address) else None
+
+
 def _start_debate_contracts(session_id: str, duration_seconds: int) -> dict[str, Any]:
     if DRY_RUN:
         from utils.dry_run_adapter import DryRunAdapter
@@ -858,19 +1019,74 @@ def _start_debate_contracts(session_id: str, duration_seconds: int) -> dict[str,
         abi=_load_abi(PROJECT_ROOT / "contracts" / "abi" / "ConvictionTracker.json"),
     )
 
-    return {
-        "escrow_tx_hash": _send_contract_tx(
+    escrow_active = bool(escrow_contract.functions.debateActive().call())
+    escrow_end_time = int(escrow_contract.functions.debateEndTime().call()) if escrow_active else 0
+    conviction_active = bool(conviction_contract.functions.debateActive().call())
+    conviction_settlement_triggered = bool(conviction_contract.functions.isSettlementTriggered().call())
+    latest_block_timestamp = int(web3.eth.get_block("latest")["timestamp"])
+    skip_check = os.getenv("SKIP_SETTLED_CONTRACT_CHECK", "").strip().lower() in {"1", "true", "yes"}
+
+
+    if conviction_settlement_triggered:
+        # Contract has settled; check if we should redeploy or skip
+        if skip_check:
+            print("[ORCHESTRATOR] WARNING: Conviction tracker has settled, but SKIP_SETTLED_CONTRACT_CHECK=true; proceeding with stale contract (demo mode)")
+        else:
+            print("[ORCHESTRATOR] Conviction tracker has settled; attempting to redeploy fresh contracts...")
+            try:
+                _redeploy_contracts()
+                # Recursively retry with fresh contracts
+                return _start_debate_contracts(session_id, duration_seconds)
+            except RuntimeError as exc:
+                print(f"[ORCHESTRATOR] Redeploy failed: {exc}")
+                print(f"[ORCHESTRATOR] Set SKIP_SETTLED_CONTRACT_CHECK=true to skip this check for demo purposes")
+                raise
+    if conviction_settlement_triggered and not skip_check:
+        # If we reach here and the contract is still settled, provide deployment instructions
+        print("\n" + "="*72)
+        print("CONTRACT SETTLEMENT DETECTED - Manual Redeployment Required")
+        print("="*72)
+        print("The ConvictionTracker contract has already settled from a previous session.")
+        print("To run a new debate session, you must deploy fresh contracts:")
+        print()
+        print("  cd contracts")
+        print("  npx hardhat ignition deploy ignition/modules/DebateEscrow.ts --network unichainSepolia --reset")
+        print("  npx hardhat ignition deploy ignition/modules/ConvictionTracker.ts --network unichainSepolia --reset")
+        print()
+        print("Then update your .env with the new contract addresses and try again.")
+        print("="*72 + "\n")
+        raise RuntimeError("ConvictionTracker has settled. Deploy fresh contracts (see instructions above)")
+
+    if escrow_active and latest_block_timestamp > escrow_end_time:
+        _send_contract_tx(
+            web3=web3,
+            private_key=private_key,
+            contract_function=escrow_contract.functions.emergencyPause("debate window expired"),
+            gas_limit_env_var="ESCROW_PAUSE_GAS_LIMIT",
+        )
+        escrow_active = False
+
+    escrow_tx_hash = "already-active"
+    if not escrow_active:
+        escrow_tx_hash = _send_contract_tx(
             web3=web3,
             private_key=private_key,
             contract_function=escrow_contract.functions.startDebate(int(duration_seconds)),
             gas_limit_env_var="ESCROW_START_GAS_LIMIT",
-        ),
-        "conviction_tx_hash": _send_contract_tx(
+        )
+
+    conviction_tx_hash = "already-active"
+    if not conviction_active:
+        conviction_tx_hash = _send_contract_tx(
             web3=web3,
             private_key=private_key,
             contract_function=conviction_contract.functions.startDebate(),
             gas_limit_env_var="CONVICTION_START_GAS_LIMIT",
-        ),
+        )
+
+    return {
+        "escrow_tx_hash": escrow_tx_hash,
+        "conviction_tx_hash": conviction_tx_hash,
     }
 
 
@@ -885,6 +1101,12 @@ def run_stake_collection_window(session_id: str, duration_seconds: int = 120) ->
     print(f"escrow_start_tx: {contract_result.get('escrow_tx_hash')}")
     print(f"conviction_start_tx: {contract_result.get('conviction_tx_hash')}")
     print("=" * 72)
+
+    if not DRY_RUN:
+        _web3, escrow_contract = _get_debate_escrow_contract()
+        stake_tx_hashes = _seed_stake_deposits(_web3, escrow_contract)
+        for label, tx_hash in stake_tx_hashes.items():
+            print(f"{label}: {tx_hash}")
 
     if DRY_RUN:
         bull_stake_wei = 0
@@ -1010,7 +1232,8 @@ def setup_round(session_id: str, round_number: int, token_pair: str, risk_manage
     # CHECKPOINT 1: Check data freshness before proceeding
     freshness_decision = risk_manager.check_data_freshness(
         snapshot_payload if isinstance(snapshot_payload, dict) else {"data_freshness_seconds": 120},
-        round_number
+        round_number,
+        refresh_snapshot_fn=lambda: _coerce_snapshot_payload(fetch_snapshot(token_pair)),
     )
     
     if freshness_decision.action == "SKIP_ROUND":
@@ -1358,7 +1581,7 @@ def execute_final_settlement(
         settlement_tx_hash = str(settle_result.get("tx_hash") or f"dry-run:settleSide:{winning_side}")
     else:
         web3, escrow_contract = _get_debate_escrow_contract()
-        private_key = _select_private_key()
+        private_key = _select_settlement_private_key()
         side_enum = 0 if winning_side.strip().lower() == "bull" else 1
         settlement_tx_hash = _send_contract_tx(
             web3=web3,

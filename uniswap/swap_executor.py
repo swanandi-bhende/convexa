@@ -1382,19 +1382,21 @@ def execute_final_settlement(session_id: str, winning_side: str, call_settle_sid
             slippage_tolerance=FINAL_SETTLEMENT_SLIPPAGE_TOLERANCE,
         )
         if not quote.success:
-            return {
-                "success": False,
-                "reason": f"final_quote_failed_tranche_{idx + 1}:{quote.reason}",
-                "tx_hashes": tranche_hashes,
-            }
+            tranche_hashes.append(f"skipped:final_quote_failed_tranche_{idx + 1}:{quote.reason}")
+            tranche_job_ids.append(None)
+            tranche_in.append(0)
+            tranche_out.append(0)
+            tranche_gas_used.append(0)
+            continue
 
         swap_calldata = build_swap_calldata(quote)
         if not swap_calldata.success:
-            return {
-                "success": False,
-                "reason": f"final_swap_build_failed_tranche_{idx + 1}:{swap_calldata.reason}",
-                "tx_hashes": tranche_hashes,
-            }
+            tranche_hashes.append(f"skipped:final_swap_build_failed_tranche_{idx + 1}:{swap_calldata.reason}")
+            tranche_job_ids.append(None)
+            tranche_in.append(0)
+            tranche_out.append(0)
+            tranche_gas_used.append(0)
+            continue
 
         # Use unified keeperhub executor when enabled
         USE_KEEPERHUB = os.getenv("USE_KEEPERHUB", "true").strip().lower() in {"1", "true", "yes"}
@@ -1408,12 +1410,12 @@ def execute_final_settlement(session_id: str, winning_side: str, call_settle_sid
                     retry_policy=FINAL_SETTLEMENT_RETRY_POLICY,
                 )
             except Exception as exc:
-                return {
-                    "success": False,
-                    "reason": f"final_keeperhub_submit_failed_tranche_{idx + 1}:{exc}",
-                    "tx_hashes": tranche_hashes,
-                    "job_ids": tranche_job_ids,
-                }
+                tranche_hashes.append(f"skipped:final_keeperhub_submit_failed_tranche_{idx + 1}:{exc}")
+                tranche_job_ids.append(None)
+                tranche_in.append(0)
+                tranche_out.append(0)
+                tranche_gas_used.append(0)
+                continue
 
             execution_id = _insert_execution_row(
                 session_id=session_id,
@@ -1438,12 +1440,12 @@ def execute_final_settlement(session_id: str, winning_side: str, call_settle_sid
         else:
             result = execute_swap_via_keeperhub(session_id, round_number, "final_settlement", quote)
             if not result.get("success"):
-                return {
-                    "success": False,
-                    "reason": f"final_keeperhub_failed_tranche_{idx + 1}:{result.get('reason')}",
-                    "tx_hashes": tranche_hashes,
-                    "job_ids": tranche_job_ids,
-                }
+                tranche_hashes.append(f"skipped:final_keeperhub_failed_tranche_{idx + 1}:{result.get('reason')}")
+                tranche_job_ids.append(result.get("job_id"))
+                tranche_in.append(0)
+                tranche_out.append(0)
+                tranche_gas_used.append(0)
+                continue
 
             execution_id = _insert_execution_row(
                 session_id=session_id,

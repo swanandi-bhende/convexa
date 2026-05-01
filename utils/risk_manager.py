@@ -14,7 +14,7 @@ import os
 import time
 from dataclasses import dataclass, asdict, field
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -133,7 +133,13 @@ class RiskManager:
             db.add(event)
             db.commit()
 
-    def check_data_freshness(self, market_snapshot: dict, round_number: int, max_retries: int = 4) -> RiskDecision:
+    def check_data_freshness(
+        self,
+        market_snapshot: dict,
+        round_number: int,
+        max_retries: int = 4,
+        refresh_snapshot_fn: Optional[Callable[[], dict]] = None,
+    ) -> RiskDecision:
         """
         First checkpoint: Guard against stale market data.
         
@@ -180,15 +186,18 @@ class RiskManager:
             time.sleep(15)
             attempt += 1
             
-            # Simulate fresh fetch attempt — in real code, call market_data.fetch_snapshot()
-            # For now, we just check if the timestamp would have advanced
             try:
-                # Placeholder: in production, call market_data.fetch_snapshot() here
-                # fresh_snapshot = market_data.fetch_snapshot()
-                # current_freshness = fresh_snapshot.get("data_freshness_seconds", data_freshness_seconds)
-                # This is where the actual fetch would happen
-                current_freshness = data_freshness_seconds  # Placeholder
-                break  # In real implementation, break if fresh data is obtained
+                if refresh_snapshot_fn is None:
+                    break
+
+                fresh_snapshot = refresh_snapshot_fn()
+                if isinstance(fresh_snapshot, dict):
+                    current_freshness = float(fresh_snapshot.get("data_freshness_seconds", data_freshness_seconds))
+                else:
+                    current_freshness = data_freshness_seconds
+
+                if current_freshness <= self.MAX_DATA_AGE_SECONDS:
+                    break
             except Exception as e:
                 print(f"  [Attempt {attempt}] Fetch failed: {e}")
                 continue
@@ -198,7 +207,33 @@ class RiskManager:
             print(f"  ✓ Fresh data obtained after {attempt} attempts")
             return RiskDecision(action="PROCEED", reason=None)
         
-        # Data is still stale after all retries — skip this round
+        # Data is still stale after all retries. For the live testnet demo, allow the
+        # round to proceed so the debate can continue on the best available snapshot.
+        allow_after_retries = os.getenv("ALLOW_STALE_DATA_AFTER_RETRIES", "1").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
+        if allow_after_retries:
+            self._log_safety_event(
+                round_number=round_number,
+                event_type="stale_data",
+                severity="pause",
+                details={
+                    "data_age_seconds": current_freshness,
+                    "max_allowed": self.MAX_DATA_AGE_SECONDS,
+                    "retry_attempts": attempt,
+                },
+                action_taken="proceed_with_stale_data_after_retries",
+            )
+            return RiskDecision(
+                action="PROCEED",
+                reason=f"data_remained_stale_after_{attempt*15}s_wait_but_proceeding",
+                context={"data_age_seconds": current_freshness, "attempts": attempt},
+            )
+
         self._log_safety_event(
             round_number=round_number,
             event_type="stale_data",
@@ -210,7 +245,7 @@ class RiskManager:
             },
             action_taken="round_skipped_stale_data",
         )
-        
+
         return RiskDecision(
             action="SKIP_ROUND",
             reason=f"data_remained_stale_after_{attempt*15}s_wait",

@@ -6,8 +6,9 @@ const ConvictionTrackerModule = buildModule("ConvictionTrackerModule", (m) => {
     configuredAgentAddress && !configuredAgentAddress.includes("your_agent_wallet_address")
       ? configuredAgentAddress
       : process.env.KEEPERHUB_EXECUTOR_ADDRESS || "0x000000000000000000000000000000000000dEaD";
+  const winThreshold = Number(process.env.DEMO_CONVICTION_WIN_THRESHOLD || process.env.CONVICTION_WIN_THRESHOLD || "70");
 
-  const convictionTracker = m.contract("ConvictionTracker", [judgeAgentAddress, 70]);
+  const convictionTracker = m.contract("ConvictionTracker", [judgeAgentAddress, winThreshold]);
 
   return { convictionTracker };
 });

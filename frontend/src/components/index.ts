@@ -11,6 +11,8 @@ export { DebatePreviewCard } from './DebatePreviewCard';
 export { ConvictionTracker } from './ConvictionTracker';
 export { ConvictionVotingForm } from './ConvictionVotingForm';
 export { ConvictionVotingModal } from './ConvictionVotingModal';
+export { AgentLeaderboard } from './AgentLeaderboard';
+export { AgentStats } from './AgentStats';
 export { StatsGrid } from './StatsGrid';
 export { BullCard } from './BullCard';
 export { BearCard } from './BearCard';

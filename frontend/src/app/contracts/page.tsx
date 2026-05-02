@@ -45,7 +45,7 @@ export default function ContractsPage() {
         <p className="text-text-secondary">Addresses, balances, stakes, and actions</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg" role="region" aria-label="Contracts list and detail">
         <div className="lg:col-span-2 space-y-md">
           {contracts.map(c => (
             <div key={c.id} onClick={() => setSelectedId(c.id)}>

@@ -29,7 +29,7 @@ interface ContractOverviewProps {
 
 export const ContractOverview: React.FC<ContractOverviewProps> = ({ contract, onView }) => {
   return (
-    <div className="rounded-lg border border-border-light bg-white p-lg">
+    <div className="rounded-lg border border-border-light bg-white p-lg" role="region" aria-label={`Contract ${contract.name ?? contract.address}`}>
       <div className="flex items-start justify-between gap-md">
         <div>
           <div className="text-sm text-text-secondary">Contract</div>

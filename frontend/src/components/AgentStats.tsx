@@ -1,6 +1,7 @@
 'use client';
 
-import React from 'react';
+import React, { Suspense } from 'react';
+const Sparkline = React.lazy(() => import('./_Sparkline'));
 import { AgentSummary } from './AgentLeaderboard';
 
 interface AgentStatsProps {
@@ -37,14 +38,9 @@ export const AgentStats: React.FC<AgentStatsProps> = ({ agent, accuracySeries = 
       <div className="mt-md">
         <div className="text-sm text-text-secondary mb-sm">Accuracy (last {accuracySeries.length || 1} rounds)</div>
         <div className="w-full overflow-hidden">
-          <svg width="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="h-20 w-full">
-            <polyline
-              fill="none"
-              stroke={agent.side === 'bull' ? '#0ea5e9' : '#fb923c'}
-              strokeWidth={2}
-              points={points}
-            />
-          </svg>
+          <Suspense fallback={<div className="h-20 w-full bg-surface" aria-hidden />}> 
+            <Sparkline points={points} color={agent.side === 'bull' ? '#0ea5e9' : '#fb923c'} width={width} height={height} />
+          </Suspense>
         </div>
       </div>
 

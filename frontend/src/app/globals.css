@@ -1,26 +1,196 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #090a0d;
+  --foreground: #f5efe5;
+  --muted: #b7a99a;
+  --panel: rgba(14, 15, 20, 0.78);
+  --panel-strong: rgba(20, 21, 28, 0.92);
+  --border: rgba(255, 255, 255, 0.08);
+  --bull: #2f8f69;
+  --bull-bright: #6ce0a7;
+  --bear: #a84d3f;
+  --bear-bright: #f08a74;
+  --accent: #e6c8a0;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
+  background:
+    radial-gradient(circle at top, rgba(230, 200, 160, 0.08), transparent 30%),
+    radial-gradient(circle at 80% 20%, rgba(108, 224, 167, 0.08), transparent 24%),
+    radial-gradient(circle at 20% 0%, rgba(240, 138, 116, 0.06), transparent 22%),
+    linear-gradient(180deg, #0e1014 0%, #090a0d 40%, #07080a 100%);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body), sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 90%);
+  opacity: 0.5;
+}
+
+::selection {
+  background: rgba(230, 200, 160, 0.35);
+  color: #fff7ef;
+}
+
+.font-display {
+  font-family: var(--font-display), serif;
+}
+
+.glass-card {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(17, 18, 24, 0.82), rgba(13, 14, 18, 0.7));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px);
+}
+
+.glass-card-strong {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(180deg, rgba(19, 20, 27, 0.96), rgba(13, 14, 18, 0.9));
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(20px);
+}
+
+@keyframes meter-flash {
+  0% {
+    filter: brightness(1.7);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
+@keyframes panel-highlight-bull {
+  0% {
+    box-shadow: 0 0 0 rgba(108, 224, 167, 0);
+  }
+  30% {
+    box-shadow: 0 0 0 1px rgba(108, 224, 167, 0.18), 0 0 48px rgba(108, 224, 167, 0.16);
+  }
+  100% {
+    box-shadow: 0 0 0 rgba(108, 224, 167, 0);
+  }
+}
+
+@keyframes panel-highlight-bear {
+  0% {
+    box-shadow: 0 0 0 rgba(240, 138, 116, 0);
+  }
+  30% {
+    box-shadow: 0 0 0 1px rgba(240, 138, 116, 0.18), 0 0 48px rgba(240, 138, 116, 0.16);
+  }
+  100% {
+    box-shadow: 0 0 0 rgba(240, 138, 116, 0);
+  }
+}
+
+@keyframes lead-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.16);
+  }
+}
+
+@keyframes live-dot {
+  0%,
+  100% {
+    transform: scale(0.86);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up-fade {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-down-fade {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.meter-flash {
+  animation: meter-flash 0.55s ease-out;
+}
+
+.panel-highlight-bull {
+  animation: panel-highlight-bull 0.9s ease-out;
+}
+
+.panel-highlight-bear {
+  animation: panel-highlight-bear 0.9s ease-out;
+}
+
+.lead-pulse {
+  animation: lead-pulse 2s ease-in-out infinite;
+}
+
+.live-dot {
+  animation: live-dot 1.5s ease-in-out infinite;
+}
+
+.slide-up-fade {
+  animation: slide-up-fade 0.45s ease-out both;
+}
+
+.slide-down-fade {
+  animation: slide-down-fade 0.35s ease-out both;
+}
+
+.typewriter-caret {
+  display: inline-block;
+  width: 0.6ch;
+  margin-left: 0.15ch;
+  border-right: 2px solid currentColor;
+  animation: blink 1s steps(1) infinite;
+}
+
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
 }

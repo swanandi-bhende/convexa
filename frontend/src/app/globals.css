@@ -1,22 +1,43 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f5f1ea;
-  --foreground: #1f2530;
-  --muted: #657085;
-  --panel: rgba(255, 255, 255, 0.82);
-  --panel-strong: rgba(255, 255, 255, 0.94);
-  --border: rgba(31, 37, 48, 0.09);
-  --bull: #2e8b67;
-  --bull-bright: #77d8a6;
-  --bear: #c05a4b;
-  --bear-bright: #f08f7f;
-  --accent: #ab7a42;
+  /* Design tokens from Gallery Editorial (editorial, warm neutrals) */
+  --surface: #fff8f7;
+  --surface-container-low: #fff0f0;
+  --surface-container-high: #f5e4e4;
+  --surface-container-highest: #f0dfde;
+  --surface-dim: #e7d6d6;
+  --background: var(--surface);
+  --on-surface: #22191a;
+  --on-surface-variant: #524343;
+  --primary: #864f51;
+  --primary-container: #a26769;
+  --secondary: #8d4861;
+  --tertiary: #6d5751;
+  --outline-variant: #d6c2c1;
+  --surface-tint: #864f51;
+  --panel-elev: rgba(34,25,26,0.04);
+  --editorial-gradient-start: #864f51;
+  --editorial-gradient-end: #a26769;
+  --on-primary: #ffffff;
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-foreground: var(--on-surface);
+  --color-surface: var(--surface);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-surface-dim: var(--surface-dim);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-primary: var(--primary);
+  --color-primary-container: var(--primary-container);
+  --color-secondary: var(--secondary);
+  --color-tertiary: var(--tertiary);
+  --color-outline-variant: var(--outline-variant);
+  --color-on-primary: var(--on-primary);
   --font-sans: var(--font-body);
   --font-display: var(--font-display);
   --font-mono: var(--font-mono);
@@ -27,12 +48,8 @@ html {
 }
 
 body {
-  background:
-    radial-gradient(circle at top, rgba(171, 122, 66, 0.14), transparent 34%),
-    radial-gradient(circle at 80% 20%, rgba(119, 216, 166, 0.16), transparent 26%),
-    radial-gradient(circle at 20% 0%, rgba(240, 143, 127, 0.14), transparent 24%),
-    linear-gradient(180deg, #faf7f2 0%, #f5f1ea 45%, #efe9df 100%);
-  color: var(--foreground);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-container-low) 45%, var(--surface-dim) 100%);
+  color: var(--on-surface);
   font-family: var(--font-body), sans-serif;
 }
 
@@ -58,17 +75,20 @@ body::before {
 }
 
 .glass-card {
-  border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(248, 244, 236, 0.84));
-  box-shadow: 0 24px 70px rgba(60, 48, 36, 0.08);
-  backdrop-filter: blur(14px);
+  background: var(--surface-container-low);
+  border-radius: 0.75rem;
+  backdrop-filter: blur(12px);
 }
 
 .glass-card-strong {
-  border: 1px solid rgba(31, 37, 48, 0.1);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(248, 244, 236, 0.92));
-  box-shadow: 0 30px 80px rgba(60, 48, 36, 0.12);
-  backdrop-filter: blur(16px);
+  background: var(--surface-container-highest);
+  border-radius: 1rem;
+  transform: translateZ(0);
+}
+
+.editorial-gradient {
+  background: linear-gradient(135deg, var(--editorial-gradient-start) 0%, var(--editorial-gradient-end) 100%);
+  color: var(--on-primary);
 }
 
 @keyframes meter-flash {

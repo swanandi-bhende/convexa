@@ -66,7 +66,7 @@ function explorerUrl(hash: string) {
 
 function statusTone(status: string) {
   if (status === "confirmed") {
-    return "bg-emerald-400";
+    return "bg-emerald-500";
   }
 
   if (status === "failed") {
@@ -185,53 +185,51 @@ export function TransactionLog() {
     <section className="glass-card-strong min-w-0 overflow-hidden rounded-[28px] p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.4em] text-slate-500">Transaction log</p>
-          <h3 className="mt-2 font-display text-4xl text-slate-900">Onchain activity</h3>
+          <p className="text-xs uppercase tracking-[0.4em] text-on-surface-variant">Transaction log</p>
+          <h3 className="mt-2 font-display text-3xl text-on-surface sm:text-4xl">Onchain activity</h3>
         </div>
-        <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-          Live feed
-        </div>
+        <div className="rounded-full bg-surface-container-low px-3 py-2 text-xs text-primary">Live feed</div>
       </div>
 
-      <div className="mt-5 grid gap-3 sm:grid-cols-4">
-        <div className="rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_10px_30px_rgba(60,48,36,0.05)]">
-          <div className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Transactions</div>
-          <div className="mt-2 font-mono text-2xl text-slate-900">{stats.totalCount}</div>
+      <div className="mt-5 grid grid-cols-2 gap-3">
+        <div className="rounded-[20px] bg-surface p-4">
+          <div className="text-[11px] uppercase tracking-[0.28em] text-on-surface-variant">Transactions</div>
+          <div className="mt-2 font-mono text-2xl text-on-surface">{stats.totalCount}</div>
         </div>
-        <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 p-4">
-          <div className="text-[11px] uppercase tracking-[0.28em] text-emerald-700">Success rate</div>
-          <div className="mt-2 font-mono text-2xl text-emerald-700">{stats.successRate}%</div>
+        <div className="rounded-[20px] bg-surface p-4">
+          <div className="text-[11px] uppercase tracking-[0.28em] text-secondary">Success rate</div>
+          <div className="mt-2 font-mono text-2xl text-secondary">{stats.successRate}%</div>
         </div>
-        <div className="rounded-[20px] border border-cyan-200 bg-cyan-50 p-4">
-          <div className="text-[11px] uppercase tracking-[0.28em] text-cyan-700">Gas used</div>
-          <div className="mt-2 font-mono text-2xl text-cyan-700">{stats.totalGasUsedGwei.toFixed(2)}</div>
+        <div className="rounded-[20px] bg-surface p-4">
+          <div className="text-[11px] uppercase tracking-[0.28em] text-tertiary">Gas used</div>
+          <div className="mt-2 font-mono text-2xl text-tertiary">{stats.totalGasUsedGwei.toFixed(2)}</div>
         </div>
-        <div className="rounded-[20px] border border-amber-200 bg-amber-50 p-4">
-          <div className="text-[11px] uppercase tracking-[0.28em] text-amber-700">Pending</div>
-          <div className="mt-2 font-mono text-2xl text-amber-700">{stats.pendingCount}</div>
+        <div className="rounded-[20px] bg-surface p-4">
+          <div className="text-[11px] uppercase tracking-[0.28em] text-primary">Pending</div>
+          <div className="mt-2 font-mono text-2xl text-primary">{stats.pendingCount}</div>
         </div>
       </div>
 
       <div className="mt-5 space-y-3">
         {visibleEntries.length === 0 ? (
-          <div className="rounded-[24px] border border-slate-200 bg-white p-5 text-sm text-slate-600">No transactions captured yet.</div>
+          <div className="rounded-[24px] bg-surface p-5 text-sm text-on-surface-variant">No transactions captured yet.</div>
         ) : null}
 
         {visibleEntries.map((entry, index) => (
           <article
             key={`${entry.type}:${entry.hash}`}
-            className={`rounded-[22px] border border-slate-200 bg-white p-4 transition shadow-[0_10px_30px_rgba(60,48,36,0.05)] ${index === 0 ? "animate-[slide-down-fade_0.35s_ease-out]" : ""}`}
+            className={`rounded-[22px] bg-surface p-4 transition ${index === 0 ? "animate-[slide-down-fade_0.35s_ease-out]" : ""}`}
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-start gap-3">
                 <span className={`mt-1 h-2.5 w-2.5 rounded-full ${statusTone(entry.status)}`} />
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <h4 className="font-medium text-slate-900">{entry.label}</h4>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] uppercase tracking-[0.25em] text-slate-500">{typeLabel(entry.type)}</span>
-                    {entry.roundNumber !== null ? <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] uppercase tracking-[0.25em] text-slate-500">Round {entry.roundNumber}</span> : null}
+                    <h4 className="font-medium text-on-surface">{entry.label}</h4>
+                    <span className="rounded-full bg-surface-container-low px-2 py-1 text-[11px] uppercase tracking-[0.25em] text-on-surface-variant">{typeLabel(entry.type)}</span>
+                    {entry.roundNumber !== null ? <span className="rounded-full bg-surface-container-low px-2 py-1 text-[11px] uppercase tracking-[0.25em] text-on-surface-variant">Round {entry.roundNumber}</span> : null}
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-on-surface-variant">
                     <span className="font-mono">{entry.hash.slice(0, 10)}...{entry.hash.slice(-6)}</span>
                     <span>{formatRelativeTime(entry.timestamp)}</span>
                     {entry.keeperHubJobId ? <span>Keeper job {entry.keeperHubJobId}</span> : null}
@@ -241,7 +239,7 @@ export function TransactionLog() {
               </div>
 
               <a
-                className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                className="rounded-full bg-surface-container-low px-3 py-2 text-xs text-on-surface transition"
                 href={entry.explorerUrl}
                 rel="noreferrer"
                 target="_blank"
@@ -256,7 +254,7 @@ export function TransactionLog() {
       {entries.length > 8 ? (
         <div className="mt-4 flex justify-center">
           <button
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/75 transition hover:border-white/20 hover:text-white"
+            className="rounded-full bg-surface-container-low px-4 py-2 text-sm text-on-surface transition"
             onClick={() => setShowAll((value) => !value)}
           >
             {showAll ? "Show fewer" : `View all (${entries.length})`}

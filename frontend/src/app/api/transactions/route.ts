@@ -86,6 +86,24 @@ function uniqueByHash(entries: TransactionEntry[]) {
   return deduped;
 }
 
+async function querySwapExecutionsSafely() {
+  const candidates = [
+    "SELECT tx_hash, status, swap_type, round_number, keeperhub_job_id, gas_used_wei, gas_price_gwei, confirmed_at, error_message FROM swap_executions ORDER BY COALESCE(confirmed_at, quote_timestamp) DESC",
+    "SELECT tx_hash, status, swap_type, round_number, keeperhub_job_id, gas_used_wei, gas_price_gwei, confirmed_at, error_message FROM swap_executions ORDER BY confirmed_at DESC",
+    "SELECT tx_hash, status, swap_type, round_number, keeperhub_job_id, gas_used_wei, NULL as gas_price_gwei, confirmed_at, error_message FROM swap_executions ORDER BY confirmed_at DESC",
+  ];
+
+  for (const sql of candidates) {
+    try {
+      return await querySqlite<SwapExecutionRow>(sql);
+    } catch {
+      // Try next SQL variant to support schema drift across environments.
+    }
+  }
+
+  return [] as SwapExecutionRow[];
+}
+
 export async function GET() {
   try {
     const db = await openSqliteDatabase();
@@ -101,9 +119,7 @@ export async function GET() {
     const sessionId = latestSession[0]?.session_id ?? null;
 
     const [swapExecutions, roundTraces, sessions] = await Promise.all([
-      querySqlite<SwapExecutionRow>(
-        "SELECT tx_hash, status, swap_type, round_number, keeperhub_job_id, gas_used_wei, gas_price_gwei, confirmed_at, error_message FROM swap_executions ORDER BY COALESCE(confirmed_at, quote_timestamp) DESC"
-      ),
+      querySwapExecutionsSafely(),
       sessionId
         ? querySqlite<RoundTraceTransactionRow>(
             "SELECT round_number, conviction_tx_hash, micro_settlement_tx_hash, timestamp FROM round_trace WHERE session_id = ? ORDER BY round_number DESC",

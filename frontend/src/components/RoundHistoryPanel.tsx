@@ -15,11 +15,11 @@ export function RoundHistoryPanel() {
 
       <div className="mt-5 space-y-3">
         {rounds.length ? (
-          rounds.map((round) => {
+          rounds.map((round, index) => {
             const winnerTone = round.winner === "bull" ? "text-emerald-200" : round.winner === "bear" ? "text-rose-200" : "text-white/65";
 
             return (
-              <article key={round.roundNumber} className="rounded-[20px] border border-white/8 bg-white/5 p-4">
+              <article key={`${round.roundNumber}-${round.timestamp}-${index}`} className="rounded-[20px] border border-white/8 bg-white/5 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-xs uppercase tracking-[0.35em] text-white/40">Round {round.roundNumber}</p>

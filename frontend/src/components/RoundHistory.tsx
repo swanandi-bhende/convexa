@@ -25,6 +25,23 @@ interface RoundHistoryResponse {
   rounds: RoundHistoryItem[];
 }
 
+function uniqueRounds(items: RoundHistoryItem[]) {
+  const seen = new Set<string>();
+  const deduped: RoundHistoryItem[] = [];
+
+  for (const item of items) {
+    const key = `${item.roundNumber}:${item.timestamp}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(item);
+  }
+
+  return deduped;
+}
+
 function formatRelativeTime(timestamp: number) {
   const deltaSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
 
@@ -59,14 +76,14 @@ function winnerLabel(winner: RoundHistoryItem["winner"]) {
 
 function winnerTone(winner: RoundHistoryItem["winner"]) {
   if (winner === "bull") {
-    return "border-emerald-400/20 bg-emerald-400/10 text-emerald-100";
+    return "bg-surface text-emerald-700";
   }
 
   if (winner === "bear") {
-    return "border-rose-400/20 bg-rose-400/10 text-rose-100";
+    return "bg-surface text-rose-700";
   }
 
-  return "border-white/15 bg-white/5 text-white/80";
+  return "bg-surface text-on-surface-variant";
 }
 
 export function RoundHistory() {
@@ -126,7 +143,7 @@ export function RoundHistory() {
     }
   }, [history]);
 
-  const rounds = history?.rounds ?? state.roundHistory.map((round) => ({
+  const rounds = uniqueRounds(history?.rounds ?? state.roundHistory.map((round) => ({
     roundNumber: round.roundNumber,
     bullScore: round.bullScore,
     bearScore: round.bearScore,
@@ -141,7 +158,7 @@ export function RoundHistory() {
     roundDurationSeconds: null,
     bullArgument: null,
     bearArgument: null,
-  }));
+  }))).sort((left, right) => right.timestamp - left.timestamp);
 
   const visibleRounds = showAll ? rounds : rounds.slice(0, 6);
   const latestWinner = rounds[0]?.winner ?? "tie";
@@ -165,25 +182,25 @@ export function RoundHistory() {
     <section className="glass-card-strong min-w-0 overflow-hidden rounded-[28px] p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.4em] text-slate-500">Round history</p>
-          <h3 className="mt-2 font-display text-4xl text-slate-900">Debate chronology</h3>
+          <p className="text-xs uppercase tracking-[0.4em] text-on-surface-variant">Round history</p>
+          <h3 className="mt-2 font-display text-3xl text-on-surface sm:text-4xl">Debate chronology</h3>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+        <div className="flex items-center gap-2 rounded-full bg-surface-container-low px-3 py-2 text-xs text-on-surface-variant">
           <span className={`h-2.5 w-2.5 rounded-full ${latestWinner === "bull" ? "bg-emerald-400" : latestWinner === "bear" ? "bg-rose-400" : "bg-amber-300"}`} />
           {leadText}
         </div>
       </div>
 
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_10px_30px_rgba(60,48,36,0.05)]">
-          <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Total rounds</div>
-          <div className="mt-2 font-mono text-3xl text-slate-900">{totalRounds}</div>
+        <div className="rounded-[20px] bg-surface p-4">
+          <div className="text-xs uppercase tracking-[0.28em] text-on-surface-variant">Total rounds</div>
+          <div className="mt-2 font-mono text-3xl text-on-surface">{totalRounds}</div>
         </div>
-        <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 p-4">
+        <div className="rounded-[20px] bg-surface p-4">
           <div className="text-xs uppercase tracking-[0.28em] text-emerald-700">Bull wins</div>
           <div className="mt-2 font-mono text-3xl text-emerald-700">{bullWins}</div>
         </div>
-        <div className="rounded-[20px] border border-rose-200 bg-rose-50 p-4">
+        <div className="rounded-[20px] bg-surface p-4">
           <div className="text-xs uppercase tracking-[0.28em] text-rose-700">Bear wins</div>
           <div className="mt-2 font-mono text-3xl text-rose-700">{bearWins}</div>
         </div>
@@ -200,13 +217,9 @@ export function RoundHistory() {
           userAtTopRef.current = containerRef.current.scrollTop < 24;
         }}
       >
-        {isLoading ? (
-          <div className="rounded-[24px] border border-slate-200 bg-white p-5 text-sm text-slate-600">Loading round history...</div>
-        ) : null}
+        {isLoading ? <div className="rounded-[24px] bg-surface p-5 text-sm text-on-surface-variant">Loading round history...</div> : null}
 
-        {!isLoading && visibleRounds.length === 0 ? (
-          <div className="rounded-[24px] border border-slate-200 bg-white p-5 text-sm text-slate-600">No rounds have been recorded yet.</div>
-        ) : null}
+        {!isLoading && visibleRounds.length === 0 ? <div className="rounded-[24px] bg-surface p-5 text-sm text-on-surface-variant">No rounds have been recorded yet.</div> : null}
 
         {visibleRounds.map((round, index) => {
           const isCurrentRound = round.roundNumber === state.currentRound;
@@ -216,71 +229,71 @@ export function RoundHistory() {
 
           return (
             <article
-              key={round.roundNumber}
-              className={`rounded-[24px] border p-5 transition ${isCurrentRound ? "border-amber-300/30 bg-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]" : "border-slate-200 bg-white"} ${isNewest ? "animate-[slide-down-fade_0.35s_ease-out]" : ""}`}
+              key={`${round.roundNumber}-${round.timestamp}-${index}`}
+              className={`rounded-[24px] bg-surface p-5 transition ${isCurrentRound ? "bg-surface-container-low" : ""} ${isNewest ? "animate-[slide-down-fade_0.35s_ease-out]" : ""}`}
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Round {round.roundNumber}</p>
+                  <p className="text-xs uppercase tracking-[0.35em] text-on-surface-variant">Round {round.roundNumber}</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full border px-3 py-1 text-xs font-medium ${winnerTone(round.winner)}`}>{winnerLabel(round.winner)} wins</span>
+                    <span className={`rounded-full px-3 py-1 text-xs font-medium ${winnerTone(round.winner)}`}>{winnerLabel(round.winner)} wins</span>
                     {round.accuracyBonusApplied ? (
-                      <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-100">
+                      <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs text-on-surface-variant">
                         Accuracy bonus {round.accuracyBonusRecipient ? `→ ${round.accuracyBonusRecipient}` : "applied"}
                       </span>
                     ) : null}
-                    {isCurrentRound ? <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-xs text-amber-100">Current round</span> : null}
+                    {isCurrentRound ? <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs text-primary">Current round</span> : null}
                   </div>
                 </div>
-                <div className="text-right text-xs uppercase tracking-[0.28em] text-white/35">
+                <div className="text-right text-xs uppercase tracking-[0.28em] text-on-surface-variant">
                   <div>{formatRelativeTime(round.timestamp)}</div>
-                  <div className="mt-1 font-mono text-[11px] text-white/50">{round.convictionUpdateStatus}</div>
+                  <div className="mt-1 font-mono text-[11px] text-on-surface-variant">{round.convictionUpdateStatus}</div>
                 </div>
               </div>
 
               <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
                 <div>
-                  <div className="flex items-center justify-between text-sm text-white/70">
+                  <div className="flex items-center justify-between text-sm text-on-surface-variant">
                     <span>Bull {round.bullScore}</span>
                     <span>Bear {round.bearScore}</span>
                   </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/6">
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-container-low">
                     <div className="flex h-full">
-                      <div className="h-full rounded-full bg-linear-to-r from-emerald-500 to-emerald-300" style={{ width: bullWidth }} />
-                      <div className="h-full rounded-full bg-linear-to-r from-rose-500 to-rose-300" style={{ width: bearWidth }} />
+                      <div className="h-full rounded-full" style={{ width: bullWidth, background: 'linear-gradient(135deg, rgba(134,79,81,0.95) 0%, rgba(162,103,105,0.95) 100%)' }} />
+                      <div className="h-full rounded-full" style={{ width: bearWidth, background: 'linear-gradient(135deg, rgba(141,72,97,0.95) 0%, rgba(109,87,81,0.95) 100%)' }} />
                     </div>
                   </div>
-                  <p className="mt-4 text-sm leading-6 text-slate-600">{round.reasoning}</p>
+                  <p className="mt-4 text-sm leading-6 text-on-surface-variant">{round.reasoning}</p>
                 </div>
 
-                <div className="space-y-3 rounded-[20px] border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                <div className="space-y-3 rounded-[20px] bg-surface-container-low p-4 text-sm text-on-surface-variant">
                   <div className="flex items-center justify-between">
                     <span>Round time</span>
-                    <span className="font-mono text-slate-900">{Math.round((round.roundDurationSeconds ?? 0) * 10) / 10 || "--"}s</span>
+                    <span className="font-mono text-on-surface">{Math.round((round.roundDurationSeconds ?? 0) * 10) / 10 || "--"}s</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Conviction tx</span>
-                    <span className="font-mono text-slate-900">{round.convictionTxHash ? `${round.convictionTxHash.slice(0, 8)}...` : "pending"}</span>
+                    <span className="font-mono text-on-surface">{round.convictionTxHash ? `${round.convictionTxHash.slice(0, 8)}...` : "pending"}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Micro settlement</span>
-                    <span className="font-mono text-slate-900">{round.microSettlementTxHash ? `${round.microSettlementTxHash.slice(0, 8)}...` : "none"}</span>
+                    <span className="font-mono text-on-surface">{round.microSettlementTxHash ? `${round.microSettlementTxHash.slice(0, 8)}...` : "none"}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Updated</span>
-                    <span className="font-mono text-slate-900">{formatRelativeTime(round.timestamp)}</span>
+                    <span className="font-mono text-on-surface">{formatRelativeTime(round.timestamp)}</span>
                   </div>
                 </div>
               </div>
 
               <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div className="rounded-[18px] border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900/90">
-                  <div className="text-[11px] uppercase tracking-[0.28em] text-emerald-700">Bull argument</div>
-                  <p className="mt-2 leading-6 text-slate-600">{round.bullArgument || "Bull argument is captured in the websocket feed."}</p>
+                <div className="rounded-[18px] bg-surface-container-low p-4 text-sm text-on-surface-variant">
+                  <div className="text-[11px] uppercase tracking-[0.28em] text-secondary">Bull argument</div>
+                  <p className="mt-2 leading-6">{round.bullArgument || "Bull argument is captured in the websocket feed."}</p>
                 </div>
-                <div className="rounded-[18px] border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900/90">
-                  <div className="text-[11px] uppercase tracking-[0.28em] text-rose-700">Bear argument</div>
-                  <p className="mt-2 leading-6 text-slate-600">{round.bearArgument || "Bear argument is captured in the websocket feed."}</p>
+                <div className="rounded-[18px] bg-surface-container-low p-4 text-sm text-on-surface-variant">
+                  <div className="text-[11px] uppercase tracking-[0.28em] text-tertiary">Bear argument</div>
+                  <p className="mt-2 leading-6">{round.bearArgument || "Bear argument is captured in the websocket feed."}</p>
                 </div>
               </div>
             </article>
@@ -291,7 +304,7 @@ export function RoundHistory() {
       {rounds.length > 6 ? (
         <div className="mt-4 flex justify-center">
           <button
-            className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+            className="rounded-full bg-surface-container-low px-4 py-2 text-sm text-on-surface transition"
             onClick={() => setShowAll((value) => !value)}
           >
             {showAll ? "Show fewer" : `Show more (${rounds.length - 6})`}

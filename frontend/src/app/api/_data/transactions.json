@@ -1,0 +1,23 @@
+{
+  "stats": {
+    "total": 3,
+    "success": 3,
+    "pending": 0
+  },
+  "entries": [
+    {
+      "type": "conviction_update",
+      "status": "confirmed",
+      "hash": "0xconv123...",
+      "timestamp": 1710001000000,
+      "explorer": "https://sepolia.etherscan.io/tx/0xconv123"
+    },
+    {
+      "type": "micro_settlement",
+      "status": "confirmed",
+      "hash": "0xsettle456...",
+      "timestamp": 1710000500000,
+      "explorer": "https://sepolia.etherscan.io/tx/0xsettle456"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "sessionId": "demo-session-0001",
+  "rounds": [
+    {
+      "roundNumber": 3,
+      "bullScore": 120,
+      "bearScore": 95,
+      "winner": "bull",
+      "reasoning": "Bull argued stronger fundamentals.",
+      "accuracyBonusApplied": false,
+      "accuracyBonusRecipient": null,
+      "convictionUpdateStatus": "applied",
+      "timestamp": 1710000000000,
+      "convictionTxHash": "0xabc123...",
+      "microSettlementTxHash": null,
+      "roundDurationSeconds": 360,
+      "bullArgument": "Bulls make a strong case for recurring revenue.",
+      "bearArgument": "Bears point to valuation concerns.",
+      "verdictPayload": { "summary": "bulls win" }
+    },
+    {
+      "roundNumber": 2,
+      "bullScore": 100,
+      "bearScore": 110,
+      "winner": "bear",
+      "reasoning": "Bear convinced on short-term headwinds.",
+      "accuracyBonusApplied": false,
+      "accuracyBonusRecipient": null,
+      "convictionUpdateStatus": "applied",
+      "timestamp": 1709996400000,
+      "convictionTxHash": null,
+      "microSettlementTxHash": null,
+      "roundDurationSeconds": 420,
+      "bullArgument": "",
+      "bearArgument": "",
+      "verdictPayload": { "summary": "bears win" }
+    }
+  ]
+}

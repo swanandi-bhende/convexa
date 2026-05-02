@@ -25,12 +25,12 @@ function ConnectionBadge() {
 
   const tone =
     state.connectionStatus === "live"
-      ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
       : state.connectionStatus === "reconnecting"
-        ? "border-amber-400/20 bg-amber-500/10 text-amber-100"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
         : state.connectionStatus === "disconnected"
-          ? "border-rose-400/20 bg-rose-500/10 text-rose-100"
-          : "border-white/10 bg-white/5 text-white/70";
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : "border-slate-200 bg-white text-slate-600";
 
   return <span className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.35em] ${tone}`}>{state.connectionStatus}</span>;
 }
@@ -74,31 +74,31 @@ export function DebateDashboard() {
 
   return (
     <main className="min-h-screen px-4 py-4 text-foreground sm:px-6 lg:px-8">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 pb-12 pt-2 lg:gap-8 lg:pb-16 lg:pt-4">
-        <header className="glass-card sticky top-4 z-20 flex flex-wrap items-center justify-between gap-4 rounded-full px-5 py-3 sm:px-6">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 pb-12 pt-6 lg:gap-8 lg:pb-16 lg:pt-8">
+        <header className="glass-card relative z-10 flex flex-wrap items-center justify-between gap-4 rounded-[20px] px-5 py-3 shadow-[0_10px_35px_rgba(60,48,36,0.08)] sm:px-6">
           <div>
-            <p className="font-display text-2xl text-white">Kompass</p>
-            <p className="text-[10px] uppercase tracking-[0.45em] text-white/40">Debate registry</p>
+            <p className="font-display text-2xl text-slate-900">Mercator</p>
+            <p className="text-[10px] uppercase tracking-[0.45em] text-slate-500">Debate registry</p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.3em] text-white/55">
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-white/75">Session {sessionId}</span>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-white/75">{networkName}</span>
+          <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.3em] text-slate-600">
+            <span className="rounded-full border border-slate-200 bg-white/80 px-3 py-2 text-slate-700">Session {sessionId}</span>
+            <span className="rounded-full border border-slate-200 bg-white/80 px-3 py-2 text-slate-700">{networkName}</span>
             <ConnectionBadge />
           </div>
         </header>
 
-        <div className="flex flex-col gap-6">
-          <section id="debate" className="order-2 grid gap-6 lg:order-1 lg:grid-cols-2">
+        <div className="grid gap-6">
+          <section id="debate" className="grid gap-6 xl:grid-cols-2">
             <DebatePanel side="bull" />
             <DebatePanel side="bear" />
           </section>
 
-          <section id="meter" className="order-1 lg:order-2">
+          <section id="meter">
             <ConvictionMeter />
           </section>
 
-          <section id="insights" className="order-3 grid gap-6 xl:grid-cols-3">
+          <section id="insights" className="grid gap-6 xl:grid-cols-3">
             <StakePanel />
             <RoundHistory />
             <TransactionLog />
@@ -108,10 +108,10 @@ export function DebateDashboard() {
         <section className="glass-card rounded-[28px] p-5 sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.35em] text-white/35">Live snapshot</p>
-              <h2 className="mt-2 font-display text-3xl text-white">Debate headline</h2>
+              <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Live snapshot</p>
+              <h2 className="mt-2 font-display text-3xl text-slate-900">Debate headline</h2>
             </div>
-            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/65">
+            <div className="rounded-full border border-slate-200 bg-white/80 px-3 py-2 text-xs text-slate-700">
               Round {state.currentRound || debateState?.currentRound || 0} | Bull {state.currentBullScore} | Bear {state.currentBearScore}
             </div>
           </div>

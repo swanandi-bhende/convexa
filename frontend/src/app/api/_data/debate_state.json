@@ -1,0 +1,13 @@
+{
+  "sessionId": "demo-session-0001",
+  "networkName": "Unichain Sepolia",
+  "chainId": 1301,
+  "currentRound": 3,
+  "currentBullScore": 120,
+  "currentBearScore": 95,
+  "debateActive": true,
+  "bullStakeTotalWei": "120000000000000000000",
+  "bearStakeTotalWei": "95000000000000000000",
+  "bullStakeTotalEth": 120,
+  "bearStakeTotalEth": 95
+}

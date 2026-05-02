@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { CONTRACT_ADDRESSES, CONVICTION_TRACKER_ABI, DEBATE_ESCROW_ABI, RPC_URLS } from "@/lib/contracts";
-import { querySqlite } from "@/lib/server/sqlite";
+import { querySqlite, openSqliteDatabase } from "@/lib/server/sqlite";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 export const runtime = "nodejs";
 
@@ -33,9 +35,32 @@ export async function GET() {
       }),
       querySqlite<{ session_id: string }>("SELECT session_id FROM debate_sessions ORDER BY start_time DESC LIMIT 1"),
     ]);
+    let sessionId = latestSession[0]?.session_id ?? null;
+
+    // If no local DB is present, load a static snapshot so serverless deployments still return UI-ready data.
+    const db = await openSqliteDatabase();
+    if (!db) {
+      const snapPath = path.join(process.cwd(), "src", "app", "api", "_data", "debate_state.json");
+      const raw = await readFile(snapPath, "utf8");
+      const parsed = JSON.parse(raw);
+      // Merge on-chain reads into the snapshot where possible, but keep snapshot values as fallback.
+      return NextResponse.json({
+        sessionId: parsed.sessionId ?? sessionId,
+        networkName: parsed.networkName ?? "Unichain Sepolia",
+        chainId: parsed.chainId ?? Number(process.env.NEXT_PUBLIC_CHAIN_ID || "1301"),
+        currentRound: toNumber(scores[2]) ?? parsed.currentRound,
+        currentBullScore: toNumber(scores[0]) ?? parsed.currentBullScore,
+        currentBearScore: toNumber(scores[1]) ?? parsed.currentBearScore,
+        debateActive: Boolean(scores[3]) ?? parsed.debateActive,
+        bullStakeTotalWei: stakeInfo[0].toString() ?? parsed.bullStakeTotalWei,
+        bearStakeTotalWei: stakeInfo[1].toString() ?? parsed.bearStakeTotalWei,
+        bullStakeTotalEth: Number.parseFloat((Number(stakeInfo[0]) / 1e18).toFixed(3)) ?? parsed.bullStakeTotalEth,
+        bearStakeTotalEth: Number.parseFloat((Number(stakeInfo[1]) / 1e18).toFixed(3)) ?? parsed.bearStakeTotalEth,
+      });
+    }
 
     return NextResponse.json({
-      sessionId: latestSession[0]?.session_id ?? null,
+      sessionId,
       networkName: "Unichain Sepolia",
       chainId: Number(process.env.NEXT_PUBLIC_CHAIN_ID || "1301"),
       currentRound: toNumber(scores[2]),

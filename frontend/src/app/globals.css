@@ -1,17 +1,17 @@
 @import "tailwindcss";
 
 :root {
-  --background: #090a0d;
-  --foreground: #f5efe5;
-  --muted: #b7a99a;
-  --panel: rgba(14, 15, 20, 0.78);
-  --panel-strong: rgba(20, 21, 28, 0.92);
-  --border: rgba(255, 255, 255, 0.08);
-  --bull: #2f8f69;
-  --bull-bright: #6ce0a7;
-  --bear: #a84d3f;
-  --bear-bright: #f08a74;
-  --accent: #e6c8a0;
+  --background: #f5f1ea;
+  --foreground: #1f2530;
+  --muted: #657085;
+  --panel: rgba(255, 255, 255, 0.82);
+  --panel-strong: rgba(255, 255, 255, 0.94);
+  --border: rgba(31, 37, 48, 0.09);
+  --bull: #2e8b67;
+  --bull-bright: #77d8a6;
+  --bear: #c05a4b;
+  --bear-bright: #f08f7f;
+  --accent: #ab7a42;
 }
 
 @theme inline {
@@ -28,10 +28,10 @@ html {
 
 body {
   background:
-    radial-gradient(circle at top, rgba(230, 200, 160, 0.08), transparent 30%),
-    radial-gradient(circle at 80% 20%, rgba(108, 224, 167, 0.08), transparent 24%),
-    radial-gradient(circle at 20% 0%, rgba(240, 138, 116, 0.06), transparent 22%),
-    linear-gradient(180deg, #0e1014 0%, #090a0d 40%, #07080a 100%);
+    radial-gradient(circle at top, rgba(171, 122, 66, 0.14), transparent 34%),
+    radial-gradient(circle at 80% 20%, rgba(119, 216, 166, 0.16), transparent 26%),
+    radial-gradient(circle at 20% 0%, rgba(240, 143, 127, 0.14), transparent 24%),
+    linear-gradient(180deg, #faf7f2 0%, #f5f1ea 45%, #efe9df 100%);
   color: var(--foreground);
   font-family: var(--font-body), sans-serif;
 }
@@ -41,16 +41,16 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background-image: linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-image: linear-gradient(rgba(31, 37, 48, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(31, 37, 48, 0.035) 1px, transparent 1px);
   background-size: 72px 72px;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 90%);
-  opacity: 0.5;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.58), transparent 90%);
+  opacity: 0.7;
 }
 
 ::selection {
-  background: rgba(230, 200, 160, 0.35);
-  color: #fff7ef;
+  background: rgba(171, 122, 66, 0.24);
+  color: #10202c;
 }
 
 .font-display {
@@ -59,16 +59,16 @@ body::before {
 
 .glass-card {
   border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(17, 18, 24, 0.82), rgba(13, 14, 18, 0.7));
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(18px);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(248, 244, 236, 0.84));
+  box-shadow: 0 24px 70px rgba(60, 48, 36, 0.08);
+  backdrop-filter: blur(14px);
 }
 
 .glass-card-strong {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: linear-gradient(180deg, rgba(19, 20, 27, 0.96), rgba(13, 14, 18, 0.9));
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(20px);
+  border: 1px solid rgba(31, 37, 48, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(248, 244, 236, 0.92));
+  box-shadow: 0 30px 80px rgba(60, 48, 36, 0.12);
+  backdrop-filter: blur(16px);
 }
 
 @keyframes meter-flash {

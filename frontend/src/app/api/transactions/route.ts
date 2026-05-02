@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { querySqlite } from "@/lib/server/sqlite";
+import { querySqlite, openSqliteDatabase } from "@/lib/server/sqlite";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 export const runtime = "nodejs";
 
@@ -86,6 +88,13 @@ function uniqueByHash(entries: TransactionEntry[]) {
 
 export async function GET() {
   try {
+    const db = await openSqliteDatabase();
+    if (!db) {
+      const snapPath = path.join(process.cwd(), "src", "app", "api", "_data", "transactions.json");
+      const raw = await readFile(snapPath, "utf8");
+      return NextResponse.json(JSON.parse(raw));
+    }
+
     const latestSession = await querySqlite<{ session_id: string }>(
       "SELECT session_id FROM debate_sessions ORDER BY start_time DESC LIMIT 1"
     );

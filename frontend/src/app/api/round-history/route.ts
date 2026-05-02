@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { querySqlite } from "@/lib/server/sqlite";
+import { querySqlite, openSqliteDatabase } from "@/lib/server/sqlite";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 export const runtime = "nodejs";
 
@@ -45,15 +47,29 @@ function toTimestamp(value: string | number | Date): number {
 
 export async function GET() {
   try {
+    const db = await openSqliteDatabase();
+    let sessionId: string | null = null;
+    let verdicts: RoundHistoryRow[] = [];
+    let roundTraces: RoundTraceRow[] = [];
+
+    if (!db) {
+      // Serverless or no local DB available: read snapshot
+      const snapPath = path.join(process.cwd(), "src", "app", "api", "_data", "round_history.json");
+      const raw = await readFile(snapPath, "utf8");
+      const parsed = JSON.parse(raw);
+      return NextResponse.json(parsed);
+    }
+
+    // Database present: run queries
     const latestSession = await querySqlite<{ session_id: string }>(
       "SELECT session_id FROM debate_sessions ORDER BY start_time DESC LIMIT 1"
     );
-    const sessionId = latestSession[0]?.session_id ?? null;
+    sessionId = latestSession[0]?.session_id ?? null;
 
-    const verdicts = await querySqlite<RoundHistoryRow>(
+    verdicts = await querySqlite<RoundHistoryRow>(
       "SELECT round_number, bull_score, bear_score, winner, reasoning, accuracy_bonus_applied, accuracy_bonus_recipient, conviction_update_status, timestamp FROM judge_verdicts ORDER BY round_number DESC"
     );
-    const roundTraces = sessionId
+    roundTraces = sessionId
       ? await querySqlite<RoundTraceRow>(
           "SELECT round_number, bull_argument_json, bear_argument_json, judge_verdict_json, conviction_tx_hash, micro_settlement_tx_hash, round_duration_seconds, timestamp FROM round_trace WHERE session_id = ? ORDER BY round_number DESC",
           [sessionId]

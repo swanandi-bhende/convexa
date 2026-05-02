@@ -22,8 +22,8 @@ const monoFont = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Kompass Debate Registry",
-  description: "A spacious on-chain debate dashboard for live conviction updates.",
+  title: "Mercator",
+  description: "A clean on-chain debate dashboard for live conviction updates.",
 };
 
 export default function RootLayout({

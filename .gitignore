@@ -23,7 +23,7 @@ typechain-types/
 coverage/
 *.log
 frontend/.next/
-axl-nodes/axl
+# axl-nodes/axl (Uncomment to ignore locally, but it must be committed for Render deployment)
 axl-nodes/logs/
 
 # Database & data

@@ -59,13 +59,13 @@ Generated: 2026-05-02T17:10:26.087827+00:00
 
 ## Post-Fix Results
 
-Validation run ID: validation-20260503-062306
+Validation run ID: validation-20260503-064426
 
 - Metric overlap rate: 15.0% (PASS)
 - Judge 5-round variance minimum: 0.0 (FAIL)
-- JSON parse failure rate: 5.0% (PASS)
+- JSON parse failure rate: 40.0% (FAIL)
 - Average conviction delta from previous round: 2.50 (FAIL)
-- Bull first reached 70 at round: 4
+- Bull first reached 70 at round: 2
 
 ## Manual Audit Results
 

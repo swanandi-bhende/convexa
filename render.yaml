@@ -1,0 +1,25 @@
+services:
+  - type: worker
+    name: convexa-backend
+    env: docker
+    dockerfilePath: Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: DEPLOYER_PRIVATE_KEY
+        sync: false
+      - key: AGENT_WALLET_PRIVATE_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: UNISWAP_API_KEY
+        sync: false
+      - key: KEEPERHUB_MCP_URL
+        sync: false
+      - key: KEEPERHUB_EXECUTOR_ADDRESS
+        sync: false
+      - key: DEBATE_ESCROW_ADDRESS
+        sync: false
+      - key: CONVICTION_TRACKER_ADDRESS
+        sync: false
+      - key: RPC_URL
+        sync: false

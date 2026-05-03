@@ -6,76 +6,58 @@
 - API Base: https://trade-api.gateway.uniswap.org/v1
 - DRY_RUN: True
 
-## Validator Runs
-- Run 1: {"ok": false, "stage": "quote", "reason": "unsupported_token", "session_id": "validator-1777259056-1", "round_number": 1}
-- Run 2: {"ok": false, "stage": "quote", "reason": "unsupported_token", "session_id": "validator-1777259056-2", "round_number": 2}
-- Run 3: {"ok": false, "stage": "quote", "reason": "unsupported_token", "session_id": "validator-1777259056-3", "round_number": 3}
+## What Worked Well
+- The quote payload exposes `quote.route`, `quote.routeString`, and `quote.output.amount`, which made it easy to render routing information in the frontend and still fall back cleanly when the route was empty in dry-run or liquidity-starved cases.
+- The integration code could keep one flow for quote, calldata, and broadcast: `fetch_quote()` in `uniswap/swap_executor.py` returns a stable `QuoteResult`, `build_swap_calldata()` turns that into a `SwapCalldata`, and `broadcast_and_confirm()` reuses the same quote object for the final execution step.
+- When `permitData` is absent, the swap path still works because the request builder only attaches `permitData` and `signature` when both are present. That kept the demo path simple and avoided special-case branches in the UI.
+- The `swap.data`, `swap.value`, `swap.gasLimit`, and `swap.gasPrice` fields were enough to show the user exactly what would be broadcast before sending anything onchain.
 
-## Friction Points
-- API responses differ by route type, which complicates one-size-fits-all parsing.
-- For dry-run integration testing, there is no canonical synthetic receipt format from API docs.
-- Rate limit docs expose 429 behavior but do not clearly publish per-minute limits by free plan in API reference.
+## Bugs and Unexpected Behaviors
+- On 2026-04-27T11:18:55.297427, using an invalid dashboard key produced `unauthorized_api_key` during quote generation.
+  - Repro: call `fetch_quote()` with `tokenIn=0x4200000000000000000000000000000000000006`, `tokenOut=0x31d0220469e10c4E71834a79b1f276d740d3768F`, `amount=1000000000000000`, `type=EXACT_INPUT`, `tokenInChainId=1301`, `tokenOutChainId=1301`, and a bad `UNISWAP_API_KEY`.
+  - Unexpected response: the validator surfaced a hard authorization failure instead of a softer quota or environment diagnostic.
+  - Impact: the app cannot infer whether the issue is a bad key, a plan restriction, or a temporary platform outage.
+
+- On 2026-04-27T12:00:52.182209, a quote that was still usable locally became too old by the time `build_swap_calldata()` retried it and returned `quote_near_expiry_refresh_required`.
+  - Repro: request a small exact-input quote, wait until it is near the refresh threshold, then call the calldata builder.
+  - Unexpected response: the code had to refresh the quote, and if the refresh hit `no_liquidity`, the entire path failed even though the earlier quote was valid enough to preview.
+  - Impact: quote freshness is operationally important but not obvious to a user in the UI.
+
+- Several test runs returned `no_liquidity` for the same low-value ETH/USDC path on Unichain Sepolia even when the request parameters were valid.
+  - Repro: repeat the exact quote call above with a valid key and the same 1e15 wei size.
+  - Unexpected response: the API often failed at quote time rather than returning a degraded route suggestion or a clearer liquidity explanation.
 
 ## Documentation Gaps
-- More explicit examples for /swap when permitData is null vs provided would reduce integration errors.
-- A dedicated section mapping quote routing variants to expected quote payload shape would help.
-- Clarification around plan-specific rate-limit numbers in the docs would improve production planning.
+- The public docs at https://developers.uniswap.org/ and https://github.com/Uniswap/uniswap-ai do not show enough concrete examples of `route` shapes for the cases we hit in practice: empty route arrays, nested route arrays, and fallback responses.
+- The docs do not clearly contrast `/quote` responses with and without `permitData`, which made the swap request builder more defensive than it should have been.
+- Plan limits and rate-limit behavior are not published clearly enough for automated builds. The difference between a bad API key, a throttled key, and a genuine liquidity failure is not obvious from the docs alone.
+- There is no clear sandbox example that shows a full quote -> calldata -> dry-run broadcast loop without onchain submission.
 
-## Requested Features
-- A documented sandbox mode for swap transaction generation without requiring onchain broadcast.
-- A lightweight endpoint to validate quote freshness/expiry semantics directly.
+## DX Friction Points
+- The API base had to be normalized to `https://trade-api.gateway.uniswap.org/v1`, while the environment also exposed `https://api.uniswap.org/v1`. That ambiguity slowed initial wiring because the two forms were not interchangeable in practice.
+- Error handling had to branch on HTTP failures, missing route data, missing calldata, and quote expiry, which made the integration code larger than expected for a simple swap flow.
+- The frontend could not rely on a single response shape for all quote scenarios, so the parsing layer had to special-case `route`, `routeString`, `permitData`, and the `swap` object separately.
 
+## Feature Requests
+- A documented sandbox endpoint that returns full `swap` calldata and a synthetic receipt would make frontends much easier to build and test.
+- A quote validation endpoint, such as `POST /quote/validate`, would help us check freshness before constructing calldata.
+- A compact response schema that always includes an explicit `reason` field for failures like low liquidity, key rejection, and quote expiry would make agent workflows easier to debug.
+
+## Reference Payload
+```json
+{
+  "tokenIn": "0x4200000000000000000000000000000000000006",
+  "tokenOut": "0x31d0220469e10c4E71834a79b1f276d740d3768F",
+  "amount": "1000000000000000",
+  "type": "EXACT_INPUT",
+  "tokenInChainId": 1301,
+  "tokenOutChainId": 1301,
+  "swapper": "0xd182af8155f1D4E2A05A4aA811A2056d1b961960",
+  "slippageTolerance": 0.5
+}
+```
 ## Additional Run
-- Date: 2026-04-27T03:04:37.116212
-- Run 1: {"ok": false, "stage": "quote", "reason": "quote_http_error", "session_id": "validator-1777259075-1", "round_number": 1}
-- Run 2: {"ok": false, "stage": "quote", "reason": "quote_http_error", "session_id": "validator-1777259075-2", "round_number": 2}
-- Run 3: {"ok": false, "stage": "quote", "reason": "quote_http_error", "session_id": "validator-1777259076-3", "round_number": 3}
 
-## Additional Run
-- Date: 2026-04-27T11:18:55.297427
-- Run 1: {"ok": false, "stage": "quote", "reason": "unauthorized_api_key", "session_id": "validator-1777288733-1", "round_number": 1}
-- Run 2: {"ok": false, "stage": "quote", "reason": "unauthorized_api_key", "session_id": "validator-1777288734-2", "round_number": 2}
-- Run 3: {"ok": false, "stage": "quote", "reason": "unauthorized_api_key", "session_id": "validator-1777288734-3", "round_number": 3}
-- Auth diagnostic: Uniswap API rejected key; set UNISWAP_API_KEY in .env to a valid dashboard key.
-
-## Additional Run
-- Date: 2026-04-27T11:57:22.654128
-- Run 1: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291039-1", "round_number": 1}
-- Run 2: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291041-2", "round_number": 2}
-- Run 3: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291041-3", "round_number": 3}
-
-## Additional Run
-- Date: 2026-04-27T12:00:52.182209
-- Run 1: {"ok": false, "stage": "swap", "reason": "quote_near_expiry_refresh_required", "session_id": "validator-1777291249-1", "round_number": 1}
-- Run 2: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291250-2", "round_number": 2}
-- Run 3: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291251-3", "round_number": 3}
-
-## Additional Run
-- Date: 2026-04-27T12:02:32.000992
-- Run 1: {"ok": false, "stage": "swap", "reason": "quote_refresh_failed:no_liquidity", "session_id": "validator-1777291348-1", "round_number": 1}
-- Run 2: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291350-2", "round_number": 2}
-- Run 3: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291351-3", "round_number": 3}
-
-## Additional Run
 - Date: 2026-04-27T12:06:20.419435
+
 - Run 1: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291577-1", "round_number": 1}
-- Run 2: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291579-2", "round_number": 2}
-- Run 3: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291579-3", "round_number": 3}
-
-## Additional Run
-- Date: 2026-04-27T12:09:05.024880
-- Run 1: {"ok": true, "session_id": "validator-1777291737-1", "round_number": 1, "quote_id": 41, "requested_amount_wei": "1000000000000000", "used_amount_wei": "1000000000000000", "fallback_applied": false, "tx_hash": "a85b38c4d0c7a99cc6495fefddc27a2b7d6666aadd8ff63e6e766f69414a3a96", "calldata_non_empty": true, "quote_rows": 1, "execution_rows": 1, "analysis_success": false, "analysis_reason": "swap_event_not_found"}
-- Run 2: {"ok": true, "session_id": "validator-1777291740-2", "round_number": 2, "quote_id": 43, "requested_amount_wei": "1000000000000000", "used_amount_wei": "100000000000000", "fallback_applied": true, "tx_hash": "401452177ed3367470dcc87b002cbc192da7a9ba3e2f99b89ba4df116457f40e", "calldata_non_empty": true, "quote_rows": 2, "execution_rows": 1, "analysis_success": false, "analysis_reason": "swap_event_not_found"}
-- Run 3: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291743-3", "round_number": 3}
-
-## Additional Run
-- Date: 2026-04-27T12:09:46.816565
-- Run 1: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291778-1", "round_number": 1}
-- Run 2: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291781-2", "round_number": 2}
-- Run 3: {"ok": false, "stage": "quote", "reason": "no_liquidity", "session_id": "validator-1777291784-3", "round_number": 3}
-
-## Additional Run
-- Date: 2026-04-27T12:10:55.151839
-- Run 1: {"ok": true, "session_id": "validator-1777291844-1", "round_number": 1, "quote_id": 65, "requested_amount_wei": "1000000000000000", "used_amount_wei": "1000000000000000", "fallback_applied": false, "tx_hash": "788ec446c74304785fff6b5450932a989660521e55861762b457ff275157406a", "calldata_non_empty": true, "quote_rows": 1, "execution_rows": 1, "analysis_success": false, "analysis_reason": "swap_event_not_found"}
-- Run 2: {"ok": true, "session_id": "validator-1777291848-2", "round_number": 2, "quote_id": 67, "requested_amount_wei": "1000000000000000", "used_amount_wei": "100000000000000", "fallback_applied": true, "tx_hash": "261a7919e2d3b12910b4f5d089b12a4f06575026dc897ac589efa3779a4ab57a", "calldata_non_empty": true, "quote_rows": 2, "execution_rows": 1, "analysis_success": false, "analysis_reason": "swap_event_not_found"}
-- Run 3: {"ok": true, "session_id": "validator-1777291851-3", "round_number": 3, "quote_id": 70, "requested_amount_wei": "1000000000000000", "used_amount_wei": "50000000000000", "fallback_applied": true, "tx_hash": "a9749c9b79e8a146525c75d7502abda22f0f033435caa8702f0b8c0edf510cfa", "calldata_non_empty": true, "quote_rows": 3, "execution_rows": 1, "analysis_success": false, "analysis_reason": "swap_event_not_found"}

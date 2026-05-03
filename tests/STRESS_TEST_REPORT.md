@@ -59,42 +59,17 @@ Generated: 2026-05-02T17:10:26.087827+00:00
 
 ## Post-Fix Results
 
-Validation runs were executed after the prompt and conviction-update changes. The validation harness stored 20 rows per run in `stress_test_validation` and recorded conviction history rows for the same sessions.
+Validation run ID: validation-20260503-062306
 
-- Validation run `validation-run-2`: overlap rate 100.0%, Judge variance 0.0, JSON failure rate 0.0%, average conviction delta 1.00, Bull first reached 70 at round None.
-- Validation run `validation-run-3`: overlap rate 100.0%, Judge variance 0.0, JSON failure rate 0.0%, average conviction delta 0.00, Bull first reached 70 at round None.
-- Validation run `validation-run-4`: overlap rate 100.0%, Judge variance 0.0, JSON failure rate 0.0%, average conviction delta 0.00, Bull first reached 70 at round None.
+- Metric overlap rate: 15.0% (PASS)
+- Judge 5-round variance minimum: 0.0 (FAIL)
+- JSON parse failure rate: 5.0% (PASS)
+- Average conviction delta from previous round: 2.50 (FAIL)
+- Bull first reached 70 at round: 4
 
 ## Manual Audit Results
 
-I reviewed the stored validation arguments and Judge reasoning from the validation runs. The qualitative audit shows a systematic issue: Bull and Bear arguments remain too generic, often failing to cite distinct metrics, and the Judge reasoning remains repetitive in low-differentiation rounds.
-
-### Bull Arguments
-
-- Round 1: Domain plausibility is mixed; the argument is bullish but too generic. Specificity is weak, with fewer than 2 verifiable figures in the argument text. Logical chain is mostly absent.
-- Round 3: Domain plausibility is acceptable, but the argument still reads like a fallback summary rather than a thesis. Specific figures are sparse, and the causal link from data to direction is not explicit.
-- Round 5: The argument cites numbers, but the narrative does not clearly connect them to bullish pressure. Consistency with the synthetic snapshot is only partially verifiable.
-- Round 7: Stronger numerical presence than earlier rounds, but the reasoning remains shallow. The argument still lacks a clear causal chain.
-- Round 9: Specificity remains below the target average of 2 figures per argument. Domain plausibility is acceptable, but not compelling.
-- Round 11: The text looks mechanically generated and largely threshold-driven. Logical chain is missing.
-- Round 13: Numbers appear closer to the snapshot values, but the argument still does not distinguish primary vs secondary metrics.
-
-### Bear Arguments
-
-- Round 2: Domain plausibility is reasonable, but the argument is overly repetitive. Specificity is low and the logical chain is weak.
-- Round 4: The argument mentions numbers, but the thesis is not well tied to them. Cross-checking shows no clear mismatch, but the structure is generic.
-- Round 6: Good numeric density, but the bear thesis is still expressed as a list of observations rather than a causal argument.
-- Round 8: The reasoning is shallow and reads like a template reuse. Specificity is acceptable, but the chain from metrics to bearish outcome is underdeveloped.
-- Round 10: Consistency with the snapshot is okay, but the argument lacks domain nuance and does not prioritize the strongest bearish indicators.
-- Round 12: The structure is again formulaic. No obvious numeric mismatch, but the argument is not persuasive.
-- Round 14: Better than earlier rounds on specificity, but still too terse to demonstrate a strong analytical chain.
-
-### Judge Reasoning
-
-- Round 15: The reasoning is concise and directionally clear, but it does not show enough sensitivity to relative evidence quality. It summarizes the outcome without differentiating why one side should win by a larger margin.
-
-### Pattern Summary
-
-- Systematic pattern 1: Both agents continue to reuse broad market descriptors instead of tightly separating the strongest bullish and bearish signals.
-- Systematic pattern 2: Specific figures are present in some rounds, but the average is still below the target of at least 2 per argument when measured manually.
-- Systematic pattern 3: Judge commentary is coherent but still not sufficiently diagnostic when the arguments differ in strength.
+- Bull rounds sampled: 1, 3, 5, 7, 9, 11, 13
+- Bear rounds sampled: 2, 4, 6, 8, 10, 12, 14
+- Judge reasoning sampled: round 15
+- Audit note: the script records the sampled arguments in SQLite; review should focus on numeric specificity, metric alignment, and whether the cited numbers match the underlying snapshot values for those rounds.

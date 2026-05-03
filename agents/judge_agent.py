@@ -43,6 +43,11 @@ from utils.db.schema import ArgumentPerformance
 from utils.risk_manager import RiskManager
 import statistics
 
+try:
+    from langchain.output_parsers import RetryOutputParser
+except Exception:  # noqa: BLE001
+    RetryOutputParser = None
+
 # Judge architecture map (must be explicit before implementation):
 # 1) Bidirectional messaging role:
 #    - Inbound: receives two AXL messages each round (one from Bull, one from Bear).
@@ -70,7 +75,7 @@ def _load_system_prompt() -> str:
         if line.strip().startswith("PROMPT_START"):
             body_start = idx + 1
             break
-    return "\n".join(lines[body_start:]).strip()
+    return "\n".join(lines[body_start:]).strip().replace("{", "{{").replace("}", "}}")
 
 
 JUDGE_SYSTEM_PROMPT = _load_system_prompt()
@@ -136,6 +141,45 @@ def set_dry_run(value: bool) -> None:
     os.environ["DRY_RUN"] = "true" if DRY_RUN else "false"
 
 
+def _set_verdict_status(*, status: str, parse_valid: bool, repaired: bool, reason: str = "") -> None:
+    global LAST_VERDICT_STATUS
+    LAST_VERDICT_STATUS = {
+        "status": status,
+        "parse_valid": bool(parse_valid),
+        "repaired": bool(repaired),
+        "reason": reason,
+    }
+
+
+def _normalize_criteria_breakdown(breakdown: dict[str, Any]) -> dict[str, int]:
+    normalized: dict[str, int] = {key: 0 for key in CRITERIA_KEYS}
+    alias_map = {
+        "evidence": "Evidence Quality",
+        "logical": "Logical Consistency",
+        "metric": "Metric Accuracy",
+        "predict": "Predictive Value",
+        "clarity": "Argument Clarity",
+    }
+
+    for raw_key, raw_value in breakdown.items():
+        key_text = str(raw_key).strip().lower()
+        target_key = None
+        for alias, canonical in alias_map.items():
+            if alias in key_text:
+                target_key = canonical
+                break
+        if target_key is None and raw_key in CRITERIA_KEYS:
+            target_key = raw_key
+        if target_key is None:
+            continue
+        try:
+            normalized[target_key] = int(raw_value)
+        except (TypeError, ValueError):
+            normalized[target_key] = 0
+
+    return normalized
+
+
 _init_parser = JsonOutputParser(pydantic_object=JudgeVerdictOutput)
 JUDGE_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages(
     [
@@ -154,6 +198,16 @@ _judge_primary_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 JUDGE_LLM = ChatGroq(model=_judge_primary_model, temperature=0.1)
 JUDGE_PARSER = JsonOutputParser(pydantic_object=JudgeVerdictOutput)
 JUDGE_CHAIN: Runnable[dict[str, Any], dict[str, Any]] = JUDGE_PROMPT_TEMPLATE | JUDGE_LLM | JUDGE_PARSER
+JUDGE_RETRY_PARSER = (
+    RetryOutputParser.from_llm(parser=JUDGE_PARSER, llm=JUDGE_LLM) if RetryOutputParser is not None else None
+)
+
+LAST_VERDICT_STATUS: dict[str, Any] = {
+    "status": "idle",
+    "parse_valid": False,
+    "repaired": False,
+    "reason": "",
+}
 
 _fallback_model = os.getenv("JUDGE_FALLBACK_MODEL", "llama-3.1-8b-instant")
 JUDGE_FALLBACK_CHAIN: Runnable[dict[str, Any], dict[str, Any]] | None = None
@@ -465,6 +519,15 @@ def score_round(
 ) -> dict[str, Any]:
     """Score one debate round, apply accuracy bonus, and return normalized verdict dict."""
 
+    def _evidence_density(argument_dict: dict[str, Any]) -> int:
+        argument_text = str(argument_dict.get("argument", ""))
+        numbers = len(re.findall(r"[-+]?\d*\.?\d+", argument_text))
+        key_metrics = argument_dict.get("keyMetrics", [])
+        metric_signals = 0
+        if isinstance(key_metrics, list):
+            metric_signals = sum(1 for item in key_metrics if any(char.isdigit() for char in str(item)))
+        return numbers + metric_signals
+
     def _apply_directional_calibration(verdict: dict[str, Any]) -> dict[str, Any]:
         bull_score = int(verdict.get("bullScore", 50))
         bear_score = int(verdict.get("bearScore", 50))
@@ -492,7 +555,32 @@ def score_round(
         verdict["bearScore"] = max(0, min(100, int(bear_score)))
         return verdict
 
-    accuracy_bonus_result = calculate_accuracy_bonus(round_number, market_snapshot)
+    def _apply_evidence_sensitivity(verdict: dict[str, Any]) -> dict[str, Any]:
+        bull_density = _evidence_density(bull_argument_dict)
+        bear_density = _evidence_density(bear_argument_dict)
+        density_gap = bull_density - bear_density
+        if density_gap == 0:
+            return verdict
+
+        sensitivity = max(2, min(10, abs(density_gap) * 2))
+        bull_score = int(verdict.get("bullScore", 50))
+        bear_score = int(verdict.get("bearScore", 50))
+
+        if density_gap > 0:
+            bull_score = min(100, bull_score + sensitivity)
+            bear_score = max(0, bear_score - sensitivity)
+        else:
+            bull_score = max(0, bull_score - sensitivity)
+            bear_score = min(100, bear_score + sensitivity)
+
+        verdict["bullScore"] = bull_score
+        verdict["bearScore"] = bear_score
+        return verdict
+
+    try:
+        accuracy_bonus_result = calculate_accuracy_bonus(round_number, market_snapshot)
+    except Exception:
+        accuracy_bonus_result = {"recipient": None, "bonus": 0}
     # Add brief historical performance context (averages over last 3 rounds) but instruct the Judge not to bias.
     session_id = os.getenv("DEBATE_SESSION_ID", "default-session")
     def _avg_score_for(side: str) -> float | None:
@@ -534,6 +622,12 @@ def score_round(
                 raise
             response = JUDGE_FALLBACK_CHAIN.invoke(invoke_payload)
 
+        if isinstance(response, dict):
+            if isinstance(response.get("bullCriteriaBreakdown"), dict):
+                response["bullCriteriaBreakdown"] = _normalize_criteria_breakdown(response["bullCriteriaBreakdown"])
+            if isinstance(response.get("bearCriteriaBreakdown"), dict):
+                response["bearCriteriaBreakdown"] = _normalize_criteria_breakdown(response["bearCriteriaBreakdown"])
+
         validated = JudgeVerdictOutput.model_validate(response)
         verdict = validated.model_dump()
         verdict["roundNumber"] = round_number
@@ -558,6 +652,8 @@ def score_round(
 
         verdict["accuracyBonusRecipient"] = recipient if recipient in {"bull", "bear"} else None
         verdict["accuracyBonusPoints"] = bonus_points if recipient in {"bull", "bear"} else 0
+        _set_verdict_status(status="ok", parse_valid=True, repaired=False, reason="")
+        verdict = _apply_evidence_sensitivity(verdict)
         return _apply_directional_calibration(verdict)
     except (OutputParserException, ValidationError, ValueError, TypeError, httpx.HTTPError, Exception):
         bull_text = str(bull_argument_dict.get("argument", ""))
@@ -599,6 +695,7 @@ def score_round(
             "accuracyBonusRecipient": None,
             "accuracyBonusPoints": 0,
         }
+        _set_verdict_status(status="fallback", parse_valid=False, repaired=False, reason="score_round_exception")
         return _apply_directional_calibration(fallback_verdict)
 
 

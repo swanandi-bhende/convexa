@@ -8,7 +8,10 @@ interface BearCardProps {
 
 export function BearCard({ name, argument, confidence, score, metrics }: BearCardProps) {
   return (
-    <article className="rounded-3xl bg-gradient-to-br from-orange-500 to-red-500 p-6 text-white shadow-[0_16px_32px_rgba(33,42,60,0.20)]">
+    <article
+      className="rounded-3xl p-6 text-white shadow-[0_16px_32px_rgba(33,42,60,0.20)]"
+      style={{ background: "linear-gradient(135deg, #f97316 0%, #ef4444 100%)" }}
+    >
       <div className="flex items-center justify-between">
         <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em]">{name}</span>
         <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-semibold">Confidence {confidence}%</span>

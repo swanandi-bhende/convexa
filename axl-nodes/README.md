@@ -55,6 +55,31 @@ cd axl-nodes/judge && ../axl -config node-config.json
 ./axl-nodes/test-mesh.sh
 ```
 
+## Quick Demo (one command)
+
+From the repository root you can run a single script that starts the three AXL
+nodes, runs a minimal inter-node message exchange, captures logs and `/recv`
+responses, and writes a concise demo transcript to `docs/axl_demo_output.txt`.
+
+Run:
+
+```bash
+bash axl-nodes/demo-axl.sh
+```
+
+Notes:
+- The script will start nodes in the background, run the same smoke test as
+	`test-mesh.sh`, then stop the nodes and save logs and `/recv` outputs to
+	`docs/axl_demo_output.txt`.
+- You can also run the steps manually:
+
+```bash
+./axl-nodes/start-all.sh
+sleep 2
+./axl-nodes/test-mesh.sh
+./axl-nodes/stop-all.sh
+```
+
 ## Troubleshooting
 
 If peer discovery fails, check that each config lists the other nodes in `Peers`

@@ -1,0 +1,37 @@
+Requesting quote (dry-run)...
+Quote result:
+QuoteResult(success=True, reason=None, quote_id=37, session_id='demo-session', round_number=0, swap_type='micro_settlement', token_in='0x4200000000000000000000000000000000000006', token_out='0x31d0220469e10c4E71834a79b1f276d740d3768F', token_in_symbol='0x4200000000000000000000000000000000000006', token_out_symbol='0x31d0220469e10c4E71834a79b1f276d740d3768F', amount_in_wei='10000000000000000', quoted_amount_out_wei='9700000000000000', quoted_price=0.97, route_description='dry_run_simulated_route', gas_estimate_wei='0', slippage_tolerance_percent=0.5, quote_timestamp=datetime.datetime(2026, 5, 3, 5, 59, 29, 959208), quote_used=False, raw_response={'quote': {'output': {'amount': '9700000000000000'}, 'route': [], 'routeString': 'dry_run_simulated_route', 'gasFee': '0'}})
+Building swap calldata...
+SwapCalldata(success=True, reason=None, quote_id=37, calldata='0xdeadbeef00000025', value_wei='0', gas_limit='250000', gas_price_wei='0', deadline_unix=1777788269, raw_response={'dry_run': True, 'quote': {'output': {'amount': '9700000000000000'}, 'route': [], 'routeString': 'dry_run_simulated_route', 'gasFee': '0'}})
+Broadcast (dry-run)...
+Traceback (most recent call last):
+  File "/Users/swanandibhende/Documents/Projects/convexa/uniswap/demo_swap.py", line 68, in <module>
+    main()
+    ~~~~^^
+  File "/Users/swanandibhende/Documents/Projects/convexa/uniswap/demo_swap.py", line 60, in main
+    broadcast = swap_executor.broadcast_and_confirm(calldata, "demo-session", 0, "micro_settlement")
+  File "/Users/swanandibhende/Documents/Projects/convexa/uniswap/swap_executor.py", line 970, in broadcast_and_confirm
+    simulated = adapter.simulate_uniswap_swap(
+        {
+    ...<11 lines>...
+        }
+    )
+  File "/Users/swanandibhende/Documents/Projects/convexa/utils/dry_run_adapter.py", line 210, in simulate_uniswap_swap
+    "quote_id": quote_row.id,
+                ^^^^^^^^^^^^
+  File "/Users/swanandibhende/Documents/Projects/convexa/.venv/lib/python3.14/site-packages/sqlalchemy/orm/attributes.py", line 569, in __get__
+    return self.impl.get(state, dict_)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/Users/swanandibhende/Documents/Projects/convexa/.venv/lib/python3.14/site-packages/sqlalchemy/orm/attributes.py", line 1096, in get
+    value = self._fire_loader_callables(state, key, passive)
+  File "/Users/swanandibhende/Documents/Projects/convexa/.venv/lib/python3.14/site-packages/sqlalchemy/orm/attributes.py", line 1126, in _fire_loader_callables
+    return state._load_expired(state, passive)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/Users/swanandibhende/Documents/Projects/convexa/.venv/lib/python3.14/site-packages/sqlalchemy/orm/state.py", line 828, in _load_expired
+    self.manager.expired_attribute_loader(self, toload, passive)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/swanandibhende/Documents/Projects/convexa/.venv/lib/python3.14/site-packages/sqlalchemy/orm/loading.py", line 1607, in load_scalar_attributes
+    raise orm_exc.DetachedInstanceError(
+    ...<2 lines>...
+    )
+sqlalchemy.orm.exc.DetachedInstanceError: Instance <SwapQuote at 0x105fa0e10> is not bound to a Session; attribute refresh operation cannot proceed (Background on this error at: https://sqlalche.me/e/20/bhk3)

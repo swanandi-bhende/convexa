@@ -27,28 +27,32 @@ export default function HistoryPage() {
 
   return (
     <div className="space-y-8">
-      <section className="rounded-3xl bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.08)]">
+      <section className="rounded-[2rem] border border-slate-200/70 bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.08)]">
         <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Debate History</h1>
         <p className="mt-2 text-slate-600">Search archives by pair, winner, date window, or performance threshold.</p>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400"
             placeholder="Search by token pair or winner"
             aria-label="Search history"
           />
-          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="From date" aria-label="From date" />
-          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="To date" aria-label="To date" />
-          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="Accuracy threshold" aria-label="Accuracy threshold" />
+          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400" placeholder="From date" aria-label="From date" />
+          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400" placeholder="To date" aria-label="To date" />
+          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400" placeholder="Accuracy threshold" aria-label="Accuracy threshold" />
         </div>
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[1fr_1fr]">
         <div className="space-y-4">
-          {filtered.map((debate) => (
-            <DebateCard key={debate.debateId} {...debate} onSelect={() => setSelectedDebate(debate)} />
-          ))}
+          {filtered.length > 0 ? (
+            filtered.map((debate) => <DebateCard key={debate.debateId} {...debate} onSelect={() => setSelectedDebate(debate)} selected={selectedDebate.debateId === debate.debateId} />)
+          ) : (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-600">
+              No debates match your current filter.
+            </div>
+          )}
         </div>
         <DebateDetail debateId={selectedDebate.debateId} rounds={roundTranscript} />
       </section>

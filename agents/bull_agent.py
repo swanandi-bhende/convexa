@@ -39,7 +39,7 @@ def _load_system_prompt() -> str:
         if line.strip().startswith("PROMPT_START"):
             body_start = idx + 1
             break
-    return "\n".join(lines[body_start:]).strip()
+    return "\n".join(lines[body_start:]).strip().replace("{", "{{").replace("}", "}}")
 
 
 SYSTEM_PROMPT = _load_system_prompt()
@@ -91,6 +91,31 @@ RETRY_PARSER = (
     RetryOutputParser.from_llm(parser=PARSER, llm=LLM) if RetryOutputParser is not None else None
 )
 
+JSON_REPAIR_LLM = ChatGroq(
+    model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    temperature=0.0,
+)
+JSON_REPAIR_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You repair malformed JSON. Return only valid JSON and preserve the schema exactly.",
+        ),
+        (
+            "human",
+            "Original prompt:\n{original_prompt}\n\nMalformed output:\n{raw_output}\n\n"
+            "Format instructions:\n{format_instructions}",
+        ),
+    ]
+)
+
+LAST_GENERATION_STATUS: dict[str, Any] = {
+    "status": "idle",
+    "parse_valid": False,
+    "repaired": False,
+    "reason": "",
+}
+
 
 DEFAULT_FALLBACK_ARGUMENT = {
     "argument": "Market signals are temporarily unavailable, so the bullish case is weak for this round. Upside remains possible but unconfirmed due to missing data.",
@@ -102,6 +127,26 @@ DEFAULT_FALLBACK_ARGUMENT = {
 }
 
 _PREVIOUS_BULL_ARGUMENT: dict[str, Any] | None = None
+
+
+def _set_generation_status(*, status: str, parse_valid: bool, repaired: bool, reason: str = "") -> None:
+    global LAST_GENERATION_STATUS
+    LAST_GENERATION_STATUS = {
+        "status": status,
+        "parse_valid": bool(parse_valid),
+        "repaired": bool(repaired),
+        "reason": reason,
+    }
+
+
+def _repair_json_output(raw_content: str, prompt_value: Any) -> str:
+    repair_prompt = JSON_REPAIR_PROMPT.format_prompt(
+        original_prompt=getattr(prompt_value, "to_string", lambda: str(prompt_value))(),
+        raw_output=raw_content,
+        format_instructions=_init_parser.get_format_instructions(),
+    )
+    repaired_output = JSON_REPAIR_LLM.invoke(repair_prompt)
+    return getattr(repaired_output, "content", str(repaired_output))
 
 
 def _is_specific_metric(metric: str) -> bool:
@@ -272,6 +317,7 @@ def generate_bull_argument(market_snapshot: MarketSnapshot, round_number: int, m
         processed = _post_process_argument(sanitize_argument(fallback), market_snapshot)
         processed = sanitize_argument(processed)
         _PREVIOUS_BULL_ARGUMENT = dict(processed)
+        _set_generation_status(status="dry_run", parse_valid=True, repaired=False, reason="dry_run")
         return _apply_bull_confidence_cap(processed, market_snapshot)
 
     market_summary = format_for_bull(market_snapshot, weights=weights)
@@ -294,31 +340,38 @@ def generate_bull_argument(market_snapshot: MarketSnapshot, round_number: int, m
         raw_output = LLM.invoke(prompt_value)
         raw_content = getattr(raw_output, "content", str(raw_output))
 
-        if RETRY_PARSER is not None:
-            parsed = RETRY_PARSER.parse_with_prompt(raw_content, prompt_value)
-        else:
+        repaired = False
+        try:
             parsed = PARSER.parse(raw_content)
+        except OutputParserException:
+            repaired = True
+            repaired_content = _repair_json_output(raw_content, prompt_value)
+            parsed = PARSER.parse(repaired_content)
 
         sanitized = sanitize_argument(parsed if isinstance(parsed, dict) else {})
         validated = BullAgentOutput.model_validate(sanitized)
         processed = _post_process_argument(validated.model_dump(), market_snapshot)
         processed = sanitize_argument(processed)
         _PREVIOUS_BULL_ARGUMENT = dict(processed)
+        _set_generation_status(status="repaired" if repaired else "ok", parse_valid=True, repaired=repaired, reason="")
         return _apply_bull_confidence_cap(processed, market_snapshot)
     except httpx.HTTPError as exc:
         fallback = _fallback_using_previous_round(round_number, f"network:{type(exc).__name__}")
         processed = _post_process_argument(fallback, market_snapshot)
         processed = sanitize_argument(processed)
+        _set_generation_status(status="fallback", parse_valid=False, repaired=False, reason=type(exc).__name__)
         return _apply_bull_confidence_cap(processed, market_snapshot)
     except (OutputParserException, ValidationError, ValueError, TypeError) as exc:
         fallback = _fallback_using_previous_round(round_number, f"parser:{type(exc).__name__}")
         processed = _post_process_argument(fallback, market_snapshot)
         processed = sanitize_argument(processed)
+        _set_generation_status(status="fallback", parse_valid=False, repaired=False, reason=type(exc).__name__)
         return _apply_bull_confidence_cap(processed, market_snapshot)
     except Exception as exc:  # noqa: BLE001 - non-network/runtime fallback
         fallback = _fallback_using_previous_round(round_number, f"runtime:{type(exc).__name__}")
         processed = _post_process_argument(fallback, market_snapshot)
         processed = sanitize_argument(processed)
+        _set_generation_status(status="fallback", parse_valid=False, repaired=False, reason=type(exc).__name__)
         return _apply_bull_confidence_cap(processed, market_snapshot)
 
 

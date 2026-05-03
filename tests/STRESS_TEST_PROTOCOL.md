@@ -19,8 +19,8 @@ Each of the 50 rounds will be evaluated and recorded in `stress_test_results` SQ
 | judge_bear_score | int | Judge's score for Bear (0-100) |
 | judge_winner | str | Judge's verdict ("bull" or "bear") |
 | judge_reasoning | str | Judge's rationale for verdict |
-| conviction_delta | float | Score difference (judge_bull_score - judge_bear_score) |
-| conviction_delta_from_prev | float | Delta compared to previous round's conviction_delta |
+| conviction_delta | float | Absolute score gap for the round (|judge_bull_score - judge_bear_score|) |
+| conviction_delta_from_prev | float | Change in the round score gap relative to the previous round |
 | bull_confidence | int | Bull agent's reported confidence (0-100) |
 | bear_confidence | int | Bear agent's reported confidence (0-100) |
 | qualitative_notes | str | Any anomalies or unusual observations |
@@ -53,11 +53,11 @@ These thresholds are set **before** running any rounds to prevent post-hoc ratio
 - **Interpretation:** Agent outputs must be reliably parseable for production use
 
 ### Threshold 4: Conviction Delta Progression
-**Failure Criterion:** If average conviction delta per round falls below 3 points, this is a failure.
-- **Measurement:** Compute absolute value of `conviction_delta` for each round, then average across all 50 rounds
-- **Pass:** Average |conviction_delta| ≥ 3.0 points
-- **Fail:** Average |conviction_delta| < 3.0 points
-- **Interpretation:** Judge verdicts should meaningfully separate Bull from Bear, not treat them as equally strong
+**Failure Criterion:** If average conviction delta movement per round falls below 3 points, this is a failure.
+- **Measurement:** Compute absolute value of `conviction_delta_from_prev` for each round after the first, then average across the run
+- **Pass:** Average |conviction_delta_from_prev| ≥ 3.0 points
+- **Fail:** Average |conviction_delta_from_prev| < 3.0 points
+- **Interpretation:** Judge verdicts should move conviction enough from one round to the next to avoid a flat-line debate
 
 ## Summary Report Format
 
@@ -89,7 +89,7 @@ FAILURE MODE METRICS
   Status: {'PASS' if parse_fail_pct <= 10 else 'FAIL'}
 
 [FAIL/PASS] Threshold 4 - Conviction Delta Progression
-  Average |conviction_delta|: {avg_conviction:.2f} points per round
+  Average |conviction_delta_from_prev|: {avg_conviction:.2f} points per round
   Threshold: ≥ 3.0 points
   Status: {'PASS' if avg_conviction >= 3.0 else 'FAIL'}
 

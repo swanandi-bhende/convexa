@@ -18,26 +18,38 @@ Criterion 1 - Evidence Quality (0-20):
   Example earning full points: 'Large wallet inflows totaled 7 ETH in the last 2 hours, representing a 3x increase over the prior 2-hour average. Volume surged 18% day-over-day to $4.2M.'
 - Minimal points (0): argument is qualitative only and cites no concrete numbers.
   Example earning zero points: 'Whales are accumulating which is bullish.'
+- Partial points example: 'Inflow activity is up and price is stronger' without exact values.
+- Strong but not perfect example: 'Price is +3.2% and volume rose 11%' with only one clear causal link.
 
 Criterion 2 - Logical Consistency (0-20):
 - Full points (20): conclusion follows directly from cited evidence without contradictions.
+- Full points example: 'Price rose 4.1% while inflows doubled, so buyers are still in control.'
 - Zero points (0): argument contradicts itself or conclusion is unsupported by cited evidence.
+- Zero points example: 'Bearish because inflows are rising and price is up, which is bullish.'
 
 Criterion 3 - Metric Accuracy (0-20):
 - Full points (20): cited values match provided market data exactly or with reasonable rounding.
   Example: The agent cited price change as -3.2% and the data shows -3.2%.
+- Full points example: '24h price change was -3.2% and volume delta was -8.9%' when the snapshot shows the same rounded values.
 - Minimal points (0): values are fabricated, misquoted, or materially misrepresented.
   Example: The agent claimed +5% when data shows -3%.
+- Minimal points example: The agent says "strong outflows" but the snapshot shows net inflows.
 
 Criterion 4 - Predictive Value (0-20):
 - Full points (20): argument makes a specific falsifiable near-term direction prediction.
+- Full points example: 'If the current pressure persists, price should test the prior support within the next 1-2 rounds.'
 - Zero points (0): directional claim is vague, non-falsifiable, or absent.
+- Zero points example: 'Things could go either way depending on the market.'
 
 Criterion 5 - Argument Clarity (0-20):
 - Full points (20): writing is readable and causality chain is explicit.
+- Full points example: 'Because inflows rose and price held above spot, bulls have the stronger near-term setup.'
 - Zero points (0): prose is confused, circular, or self-referential.
+- Zero points example: 'The argument is bullish because it is bullish.'
 
 CRITICAL: Your scores must reflect the actual quality difference between the two arguments this round. If one argument cites three specific numbers with clear logical connections and the other makes only vague qualitative claims, the score difference must be at least 15 points. Giving both arguments similar scores when their evidence quality clearly differs is a scoring error.
+
+CRITICAL ANTI-ANCHORING INSTRUCTION: Do not reuse a default spread like 52/48, 55/45, or 60/40 unless the two arguments are genuinely close in quality. If one side cites multiple exact metrics with a coherent causal chain and the other side is vague or partially inaccurate, the gap must usually be 15+ points. If the two sides are both strong, you may keep the gap narrower, but the scores still must move based on round-specific evidence.
 
 If you are about to assign scores within 5 points of each other, stop and verify whether the evidence quality is truly similar. If not, increase the spread to 10-15 points.
 

@@ -20,14 +20,23 @@ const trendData = [
 export default function AgentsPage() {
   return (
     <div className="space-y-8">
-      <section className="rounded-3xl bg-white p-7 shadow-[0_8px_24px_rgba(33,42,60,0.08)]">
+      <section className="rounded-[2rem] border border-slate-200/70 bg-white p-7 shadow-[0_8px_24px_rgba(33,42,60,0.08)]">
         <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Agent Performance</p>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">Bull and Bear Leaderboard</h1>
         <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="Filter token pair" aria-label="Filter token pair" />
-          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="Start date" aria-label="Start date" />
-          <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="End date" aria-label="End date" />
-          <button className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Apply Filters</button>
+          <label className="space-y-2 text-sm text-slate-600">
+            Pair
+            <input className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400" placeholder="Filter token pair" aria-label="Filter token pair" />
+          </label>
+          <label className="space-y-2 text-sm text-slate-600">
+            Start
+            <input className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400" placeholder="Start date" aria-label="Start date" />
+          </label>
+          <label className="space-y-2 text-sm text-slate-600">
+            End
+            <input className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400" placeholder="End date" aria-label="End date" />
+          </label>
+          <button className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800">Apply Filters</button>
         </div>
       </section>
 

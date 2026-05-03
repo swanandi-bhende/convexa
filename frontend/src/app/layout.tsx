@@ -41,7 +41,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <Providers>
           <Header />
-          <div className="mx-auto flex w-full max-w-[1400px] flex-1">
+          <div className="mx-auto flex w-full max-w-350 flex-1">
             <Sidebar />
             <main className="w-full px-6 py-8 lg:px-10 lg:py-10">{children}</main>
           </div>

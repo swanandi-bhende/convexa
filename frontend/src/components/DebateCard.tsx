@@ -7,13 +7,18 @@ interface DebateCardProps {
   date: string;
   duration: string;
   onSelect: () => void;
+  selected?: boolean;
 }
 
-export function DebateCard({ debateId, tokenPair, winner, bullScore, bearScore, date, duration, onSelect }: DebateCardProps) {
+export function DebateCard({ debateId, tokenPair, winner, bullScore, bearScore, date, duration, onSelect, selected }: DebateCardProps) {
   const winnerTone = winner === "Bull" ? "bg-blue-100 text-blue-700" : winner === "Bear" ? "bg-orange-100 text-orange-700" : "bg-slate-200 text-slate-700";
 
   return (
-    <button onClick={onSelect} className="w-full rounded-2xl bg-white p-5 text-left shadow-[0_8px_24px_rgba(33,42,60,0.07)] transition hover:-translate-y-0.5">
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`w-full rounded-2xl border bg-white p-5 text-left shadow-[0_8px_24px_rgba(33,42,60,0.07)] transition hover:-translate-y-0.5 ${selected ? "border-slate-950 ring-2 ring-slate-950/10" : "border-slate-200/70"}`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm text-slate-500">{date}</p>

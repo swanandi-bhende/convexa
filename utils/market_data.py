@@ -12,6 +12,7 @@ from typing import Any
 import requests
 from web3 import Web3
 
+from utils.constants import METRIC_SENTIMENT_MAP
 from utils.db_manager import init_database
 
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -757,6 +758,54 @@ def _metric_lines(snapshot: MarketSnapshot) -> list[str]:
     ]
 
 
+def _metric_line_map(snapshot: MarketSnapshot) -> dict[str, str]:
+    return {line.split(":", 1)[0].strip(): line for line in _metric_lines(snapshot)}
+
+
+def _focus_metric_lines(snapshot: MarketSnapshot, side: str) -> list[str]:
+    label_lookup = {
+        "price_change_24h_percent": "24h price change",
+        "volume_delta_percent": "volume delta percent",
+        "funding_rate_proxy": "funding rate proxy",
+        "lp_net_flow_usd": "lp net flow usd",
+        "large_inflow_count": "large inflow count",
+        "large_outflow_count": "large outflow count",
+        "recent_lp_additions_usd": "recent lp additions usd",
+        "recent_lp_removals_usd": "recent lp removals usd",
+        "net_wallet_flow_count": "net wallet flow count",
+    }
+    line_map = _metric_line_map(snapshot)
+    focused: list[str] = []
+
+    for metric_name, sentiment in METRIC_SENTIMENT_MAP.items():
+        label = label_lookup.get(metric_name)
+        if label is None:
+            continue
+
+        line = line_map.get(label)
+        if line is None:
+            continue
+
+        value_text = line.split(":", 1)[1].strip()
+        numeric_value: float | None = None
+        try:
+            numeric_value = float(value_text.rstrip("%"))
+        except ValueError:
+            numeric_value = None
+
+        if sentiment == "directional":
+            if side == "bull" and numeric_value is not None and numeric_value > 0:
+                focused.append(line)
+            elif side == "bear" and numeric_value is not None and numeric_value < 0:
+                focused.append(line)
+        elif sentiment == "bullish_primary" and side == "bull":
+            focused.append(line)
+        elif sentiment == "bearish_primary" and side == "bear":
+            focused.append(line)
+
+    return focused
+
+
 def format_for_bear(snapshot: MarketSnapshot, weights: dict[str, float] | None = None) -> str:
     lines = _metric_lines(snapshot)
     weights = weights or {}
@@ -800,7 +849,12 @@ def format_for_bear(snapshot: MarketSnapshot, weights: dict[str, float] | None =
     if bullish_metrics:
         result_parts.append(f"⚠️ CAUTION: The following metrics favor Bull and should NOT be your primary argument foundation: {'; '.join(bullish_metrics)}. Use only if you can credibly reinterpret them bearishly.")
     
-    result_parts.append("Focus your argument on these primary bearish indicators: large_outflow_count, recent_lp_removals_usd, negative price_change metrics, negative volume_delta metrics.")
+    focus_lines = _focus_metric_lines(snapshot, "bear")
+    result_parts.append(
+        "Focus your argument on these primary bearish indicators: "
+        f"{', '.join(focus_lines) if focus_lines else 'large outflow count and negative directional metrics'}. "
+        "Avoid leading with metrics that are positive this round."
+    )
     return " ".join(result_parts)
 
 
@@ -845,7 +899,12 @@ def format_for_bull(snapshot: MarketSnapshot, weights: dict[str, float] | None =
     if bearish_metrics:
         result_parts.append(f"⚠️ CAUTION: The following metrics favor Bear and should NOT be your primary argument foundation: {'; '.join(bearish_metrics)}. Use only if you can credibly reinterpret them bullishly.")
     
-    result_parts.append("Focus your argument on these primary bullish indicators: large_inflow_count, recent_lp_additions_usd, positive price_change metrics, positive volume_delta metrics.")
+    focus_lines = _focus_metric_lines(snapshot, "bull")
+    result_parts.append(
+        "Focus your argument on these primary bullish indicators: "
+        f"{', '.join(focus_lines) if focus_lines else 'large inflow count and positive directional metrics'}. "
+        "Avoid leading with metrics that are negative this round."
+    )
     return " ".join(result_parts)
 
 

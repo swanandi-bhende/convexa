@@ -10,16 +10,16 @@ export function ConvictionTracker({ bullScore, bearScore, threshold = 70 }: Conv
   const bearPercent = 100 - bullPercent;
 
   return (
-    <section className="rounded-3xl bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.09)]">
+    <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.09)]">
       <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">Conviction Tracker</p>
       <div className="mt-5 overflow-hidden rounded-2xl bg-slate-100">
         <div className="flex h-7 w-full">
-          <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${bullPercent}%` }} aria-label="Bull conviction" />
+          <div className="h-full bg-sky-500 transition-all duration-500" style={{ width: `${bullPercent}%` }} aria-label="Bull conviction" />
           <div className="h-full bg-orange-500 transition-all duration-500" style={{ width: `${bearPercent}%` }} aria-label="Bear conviction" />
         </div>
       </div>
       <div className="mt-4 flex items-center justify-between text-sm">
-        <span className="font-semibold text-blue-700">Bull {bullScore}</span>
+        <span className="font-semibold text-sky-700">Bull {bullScore}</span>
         <span className="font-semibold text-slate-600">Threshold {threshold}</span>
         <span className="font-semibold text-orange-700">Bear {bearScore}</span>
       </div>

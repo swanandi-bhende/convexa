@@ -9,7 +9,7 @@ export default function StakePage() {
 
   return (
     <div className="space-y-8">
-      <section className="rounded-3xl bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.08)]">
+      <section className="rounded-[2rem] border border-slate-200/70 bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.08)]">
         <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Stake and Escrow</h1>
         <p className="mt-2 text-slate-600">Track contract balances, place Bull or Bear stakes, and inspect payout readiness.</p>
       </section>
@@ -27,7 +27,7 @@ export default function StakePage() {
         />
       </div>
 
-      <section className="rounded-2xl bg-slate-900 px-5 py-4 text-sm text-slate-100">{lastMessage}</section>
+      <section className="rounded-2xl border border-slate-200/70 bg-slate-950 px-5 py-4 text-sm text-slate-100 shadow-[0_10px_24px_rgba(15,23,42,0.18)]">{lastMessage}</section>
     </div>
   );
 }

@@ -17,6 +17,7 @@ COPY requirements.txt ./
 COPY agents/requirements.txt ./agents/
 COPY package.json package-lock.json ./
 COPY contracts/package.json contracts/package-lock.json ./contracts/
+COPY frontend/package.json frontend/package-lock.json ./frontend/
 
 # Install Node dependencies and Python dependencies
 RUN npm install

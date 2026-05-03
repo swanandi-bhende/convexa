@@ -18,6 +18,8 @@ from utils.db.schema import (
     MarketPriceBaseline,
     RoundTrace,
     RoundComparison,
+    ConvictionHistory,
+    StressTestValidation,
 )
 
 
@@ -423,3 +425,214 @@ def upsert_round_trace(
         session.commit()
         session.refresh(existing)
         return existing
+
+
+def insert_stress_test_result(
+    *,
+    round_number: int,
+    market_condition: str,
+    bull_argument_text: str,
+    bear_argument_text: str,
+    bull_metrics_cited: list[str],
+    bear_metrics_cited: list[str],
+    metric_overlap_count: int,
+    bull_json_valid: bool,
+    bear_json_valid: bool,
+    judge_bull_score: int,
+    judge_bear_score: int,
+    judge_winner: str,
+    judge_reasoning: str,
+    conviction_delta: float,
+    conviction_delta_from_prev: float | None,
+    bull_confidence: int,
+    bear_confidence: int,
+    qualitative_notes: str = "",
+    groq_latency_ms: float = 0.0,
+) -> None:
+    """Insert one stress test result record."""
+    from utils.db.schema import StressTestResult
+    
+    with get_session() as session:
+        row = StressTestResult(
+            round_number=round_number,
+            market_condition=market_condition,
+            bull_argument_text=bull_argument_text,
+            bear_argument_text=bear_argument_text,
+            bull_metrics_cited=json.dumps(bull_metrics_cited),
+            bear_metrics_cited=json.dumps(bear_metrics_cited),
+            metric_overlap_count=metric_overlap_count,
+            bull_json_valid=bull_json_valid,
+            bear_json_valid=bear_json_valid,
+            judge_bull_score=judge_bull_score,
+            judge_bear_score=judge_bear_score,
+            judge_winner=judge_winner,
+            judge_reasoning=judge_reasoning,
+            conviction_delta=conviction_delta,
+            conviction_delta_from_prev=conviction_delta_from_prev,
+            bull_confidence=bull_confidence,
+            bear_confidence=bear_confidence,
+            qualitative_notes=qualitative_notes,
+            groq_latency_ms=groq_latency_ms,
+            timestamp=datetime.now(UTC),
+        )
+        session.add(row)
+        session.commit()
+
+
+def get_all_stress_test_results() -> list[dict[str, Any]]:
+    """Fetch all stress test results as list of dicts."""
+    from utils.db.schema import StressTestResult
+    
+    with get_session() as session:
+        stmt = select(StressTestResult).order_by(StressTestResult.round_number)
+        rows = session.scalars(stmt).all()
+        return [
+            {
+                "round_number": row.round_number,
+                "market_condition": row.market_condition,
+                "bull_argument_text": row.bull_argument_text,
+                "bear_argument_text": row.bear_argument_text,
+                "bull_metrics_cited": json.loads(row.bull_metrics_cited),
+                "bear_metrics_cited": json.loads(row.bear_metrics_cited),
+                "metric_overlap_count": row.metric_overlap_count,
+                "bull_json_valid": row.bull_json_valid,
+                "bear_json_valid": row.bear_json_valid,
+                "judge_bull_score": row.judge_bull_score,
+                "judge_bear_score": row.judge_bear_score,
+                "judge_winner": row.judge_winner,
+                "judge_reasoning": row.judge_reasoning,
+                "conviction_delta": row.conviction_delta,
+                "conviction_delta_from_prev": row.conviction_delta_from_prev,
+                "bull_confidence": row.bull_confidence,
+                "bear_confidence": row.bear_confidence,
+                "qualitative_notes": row.qualitative_notes,
+                "groq_latency_ms": row.groq_latency_ms,
+                "timestamp": row.timestamp.isoformat() if row.timestamp else "",
+            }
+            for row in rows
+        ]
+
+
+def insert_stress_test_validation_result(
+    *,
+    validation_run_id: str,
+    round_number: int,
+    market_condition: str,
+    bull_argument_text: str,
+    bear_argument_text: str,
+    bull_metrics_cited: list[str],
+    bear_metrics_cited: list[str],
+    metric_overlap_count: int,
+    bull_json_valid: bool,
+    bear_json_valid: bool,
+    judge_bull_score: int,
+    judge_bear_score: int,
+    judge_winner: str,
+    judge_reasoning: str,
+    conviction_delta: float,
+    bull_conviction: float,
+    bear_conviction: float,
+    qualitative_notes: str = "",
+) -> None:
+    with get_session() as session:
+        row = StressTestValidation(
+            validation_run_id=validation_run_id,
+            round_number=round_number,
+            market_condition=market_condition,
+            bull_argument_text=bull_argument_text,
+            bear_argument_text=bear_argument_text,
+            bull_metrics_cited=json.dumps(bull_metrics_cited),
+            bear_metrics_cited=json.dumps(bear_metrics_cited),
+            metric_overlap_count=metric_overlap_count,
+            bull_json_valid=bull_json_valid,
+            bear_json_valid=bear_json_valid,
+            judge_bull_score=judge_bull_score,
+            judge_bear_score=judge_bear_score,
+            judge_winner=judge_winner,
+            judge_reasoning=judge_reasoning,
+            conviction_delta=conviction_delta,
+            bull_conviction=bull_conviction,
+            bear_conviction=bear_conviction,
+            qualitative_notes=qualitative_notes,
+            timestamp=datetime.now(UTC),
+        )
+        session.add(row)
+        session.commit()
+
+
+def get_all_stress_test_validation_results() -> list[dict[str, Any]]:
+    with get_session() as session:
+        stmt = select(StressTestValidation).order_by(StressTestValidation.round_number)
+        rows = session.scalars(stmt).all()
+        return [
+            {
+                "validation_run_id": row.validation_run_id,
+                "round_number": row.round_number,
+                "market_condition": row.market_condition,
+                "bull_argument_text": row.bull_argument_text,
+                "bear_argument_text": row.bear_argument_text,
+                "bull_metrics_cited": json.loads(row.bull_metrics_cited),
+                "bear_metrics_cited": json.loads(row.bear_metrics_cited),
+                "metric_overlap_count": row.metric_overlap_count,
+                "bull_json_valid": row.bull_json_valid,
+                "bear_json_valid": row.bear_json_valid,
+                "judge_bull_score": row.judge_bull_score,
+                "judge_bear_score": row.judge_bear_score,
+                "judge_winner": row.judge_winner,
+                "judge_reasoning": row.judge_reasoning,
+                "conviction_delta": row.conviction_delta,
+                "bull_conviction": row.bull_conviction,
+                "bear_conviction": row.bear_conviction,
+                "qualitative_notes": row.qualitative_notes,
+                "timestamp": row.timestamp.isoformat() if row.timestamp else "",
+            }
+            for row in rows
+        ]
+
+
+def insert_conviction_history(
+    *,
+    session_id: str,
+    round_number: int,
+    bull_score: int,
+    bear_score: int,
+    delta_from_previous_bull: int | None = None,
+    delta_from_previous_bear: int | None = None,
+    drift_flagged: bool = False,
+) -> ConvictionHistory:
+    with get_session() as session:
+        row = ConvictionHistory(
+            session_id=session_id,
+            round_number=round_number,
+            bull_score=bull_score,
+            bear_score=bear_score,
+            delta_from_previous_bull=delta_from_previous_bull,
+            delta_from_previous_bear=delta_from_previous_bear,
+            drift_flagged=drift_flagged,
+            timestamp=datetime.now(UTC),
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+
+def get_conviction_history(session_id: str | None = None) -> list[dict[str, Any]]:
+    with get_session() as session:
+        stmt = select(ConvictionHistory).order_by(ConvictionHistory.round_number)
+        if session_id is not None:
+            stmt = stmt.where(ConvictionHistory.session_id == session_id)
+        rows = session.scalars(stmt).all()
+        return [
+            {
+                "session_id": row.session_id,
+                "round_number": row.round_number,
+                "bull_score": row.bull_score,
+                "bear_score": row.bear_score,
+                "delta_from_previous_bull": row.delta_from_previous_bull,
+                "delta_from_previous_bear": row.delta_from_previous_bear,
+                "drift_flagged": row.drift_flagged,
+                "timestamp": row.timestamp.isoformat() if row.timestamp else "",
+            }
+            for row in rows
+        ]

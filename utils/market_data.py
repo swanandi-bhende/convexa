@@ -789,6 +789,18 @@ def format_for_bear(snapshot: MarketSnapshot, weights: dict[str, float] | None =
     result_parts.append(f"Complete metrics: {' ; '.join(ordered + weak_lines)}.")
     if weak_lines:
         result_parts.append(f"[WEAK SIGNAL] { ' ; '.join(weak_lines)}")
+    
+    # Metric-sentiment guidance for Bear agent
+    bullish_metrics = []
+    if snapshot.large_inflow_count >= 5:
+        bullish_metrics.append(f"large inflow count: {snapshot.large_inflow_count}")
+    if snapshot.recent_lp_additions_usd > 10000:
+        bullish_metrics.append(f"recent lp additions: ${snapshot.recent_lp_additions_usd:.0f}")
+    
+    if bullish_metrics:
+        result_parts.append(f"⚠️ CAUTION: The following metrics favor Bull and should NOT be your primary argument foundation: {'; '.join(bullish_metrics)}. Use only if you can credibly reinterpret them bearishly.")
+    
+    result_parts.append("Focus your argument on these primary bearish indicators: large_outflow_count, recent_lp_removals_usd, negative price_change metrics, negative volume_delta metrics.")
     return " ".join(result_parts)
 
 
@@ -822,6 +834,18 @@ def format_for_bull(snapshot: MarketSnapshot, weights: dict[str, float] | None =
     result_parts.append(f"Complete metrics: {' ; '.join(ordered + weak_lines)}.")
     if weak_lines:
         result_parts.append(f"[WEAK SIGNAL] { ' ; '.join(weak_lines)}")
+    
+    # Metric-sentiment guidance for Bull agent
+    bearish_metrics = []
+    if snapshot.large_outflow_count >= 5:
+        bearish_metrics.append(f"large outflow count: {snapshot.large_outflow_count}")
+    if snapshot.recent_lp_removals_usd > 10000:
+        bearish_metrics.append(f"recent lp removals: ${snapshot.recent_lp_removals_usd:.0f}")
+    
+    if bearish_metrics:
+        result_parts.append(f"⚠️ CAUTION: The following metrics favor Bear and should NOT be your primary argument foundation: {'; '.join(bearish_metrics)}. Use only if you can credibly reinterpret them bullishly.")
+    
+    result_parts.append("Focus your argument on these primary bullish indicators: large_inflow_count, recent_lp_additions_usd, positive price_change metrics, positive volume_delta metrics.")
     return " ".join(result_parts)
 
 

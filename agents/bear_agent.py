@@ -17,6 +17,11 @@ from langchain_core.runnables import Runnable
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field, conint
 
+try:
+    from langchain.output_parsers import RetryOutputParser
+except Exception:  # noqa: BLE001
+    RetryOutputParser = None
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -28,18 +33,19 @@ from agents.memory import AgentMemory, PerformanceTracker
 from agents.strategy_adapter import StrategyAdapter
 
 
-SYSTEM_PROMPT = (
-    "You are a Bear analyst specializing in onchain market analysis. "
-    "You will receive real token market data each round. "
-    "Your job is to construct the most compelling bearish argument supported by the data provided. "
-    # Prompt iteration note: we explicitly require numeric citations, field names, and confidence calibration examples
-    # to reduce vague arguments and malformed JSON during repeated live rounds.
-    "You must output ONLY valid JSON with exactly three fields: argument (string), confidence (integer 0-100), and keyMetrics (array of 2-4 strings). "
-    "The argument must be 2-3 sentences and include at least two specific metric values exactly as numbers from the provided data. "
-    "Confidence calibration: use 80-100 for strongly bearish aligned signals, 40-60 for mixed signals, and 0-39 for weak bearish evidence. "
-    "Each keyMetrics item must include metric name plus value, for example: '24h price change: -3.2%'. "
-    "Never output anything outside the JSON object. Never add markdown formatting or code fences."
-)
+def _load_system_prompt() -> str:
+    prompt_path = PROJECT_ROOT / "agents" / "prompts" / "bear_system_prompt_v1.txt"
+    raw = prompt_path.read_text(encoding="utf-8")
+    lines = raw.splitlines()
+    body_start = 0
+    for idx, line in enumerate(lines):
+        if line.strip().startswith("PROMPT_START"):
+            body_start = idx + 1
+            break
+    return "\n".join(lines[body_start:]).strip()
+
+
+SYSTEM_PROMPT = _load_system_prompt()
 
 
 class BearAgentOutput(BaseModel):
@@ -79,6 +85,9 @@ LLM = ChatGroq(
 
 PARSER = JsonOutputParser(pydantic_object=BearAgentOutput)
 BEAR_CHAIN: Runnable[dict[str, Any], dict[str, Any]] = PROMPT_TEMPLATE | LLM | PARSER
+RETRY_PARSER = (
+    RetryOutputParser.from_llm(parser=PARSER, llm=LLM) if RetryOutputParser is not None else None
+)
 
 
 DEFAULT_FALLBACK_ARGUMENT = {
@@ -90,6 +99,8 @@ DEFAULT_FALLBACK_ARGUMENT = {
     ],
 }
 
+_PREVIOUS_BEAR_ARGUMENT: dict[str, Any] | None = None
+
 
 def _is_specific_metric(metric: str) -> bool:
     return any(char.isdigit() for char in metric)
@@ -97,10 +108,10 @@ def _is_specific_metric(metric: str) -> bool:
 
 def _default_key_metrics(snapshot: MarketSnapshot) -> list[str]:
     return [
-        f"24h price change: {snapshot.price_change_24h_percent:.2f}%",
-        f"large wallet outflows 2h: {snapshot.large_outflow_count}",
-        f"current price: {snapshot.current_price:.6f}",
-        f"24h baseline price: {snapshot.price_24h_ago:.6f}",
+        f"large outflow count: {snapshot.large_outflow_count}",
+        f"recent lp removals usd: {snapshot.recent_lp_removals_usd:.2f}",
+        f"funding rate proxy: {snapshot.funding_rate_proxy:.2f}%",
+        f"volume delta percent: {snapshot.volume_delta_percent:.2f}%",
     ]
 
 
@@ -181,8 +192,56 @@ def _post_process_argument(payload: dict[str, Any], snapshot: MarketSnapshot) ->
     }
 
 
+def sanitize_argument(raw_dict: dict[str, Any]) -> dict[str, Any]:
+    argument = str(raw_dict.get("argument", "")).strip()
+    if len(argument) > 500:
+        argument = argument[:500]
+
+    confidence_value = raw_dict.get("confidence", 50)
+    try:
+        confidence = int(confidence_value)
+    except (TypeError, ValueError):
+        confidence = 50
+    confidence = max(0, min(100, confidence))
+
+    metrics = raw_dict.get("keyMetrics", [])
+    if not isinstance(metrics, list):
+        metrics = [str(metrics)] if metrics is not None else []
+    normalized_metrics = [str(item) for item in metrics if str(item).strip()]
+
+    return {
+        "argument": argument,
+        "confidence": confidence,
+        "keyMetrics": normalized_metrics,
+    }
+
+
+def _fallback_using_previous_round(round_number: int, reason: str) -> dict[str, Any]:
+    if _PREVIOUS_BEAR_ARGUMENT is not None:
+        reused = sanitize_argument(dict(_PREVIOUS_BEAR_ARGUMENT))
+        reused["confidence"] = max(0, int(reused.get("confidence", 50)) - 20)
+        reused["argument"] = (
+            f"Round {round_number}: reusing prior bearish argument because JSON generation failed "
+            f"({reason}). {reused.get('argument', '')}"
+        ).strip()
+        if len(reused["argument"]) > 500:
+            reused["argument"] = reused["argument"][:500]
+        if not reused.get("keyMetrics"):
+            reused["keyMetrics"] = ["fallback: previous-round reuse"]
+        return reused
+
+    fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
+    fallback["argument"] = (
+        f"Round {round_number}: unable to generate bearish JSON output ({reason}), "
+        "using conservative fallback."
+    )
+    return sanitize_argument(fallback)
+
+
 def generate_bear_argument(market_snapshot: MarketSnapshot, round_number: int, memory: AgentMemory | None = None, weights: dict | None = None) -> dict[str, Any]:
     """Generate a validated bearish argument for one round with robust fallback behavior."""
+    global _PREVIOUS_BEAR_ARGUMENT
+
     if DRY_RUN:
         fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
         fallback["argument"] = (
@@ -190,7 +249,10 @@ def generate_bear_argument(market_snapshot: MarketSnapshot, round_number: int, m
             f"Price change {market_snapshot.price_change_24h_percent:.2f}% and large outflows {market_snapshot.large_outflow_count} were reviewed."
         )
         fallback["confidence"] = 58 if market_snapshot.price_change_24h_percent >= 0 else 46
-        return _post_process_argument(fallback, market_snapshot)
+        processed = _post_process_argument(sanitize_argument(fallback), market_snapshot)
+        processed = sanitize_argument(processed)
+        _PREVIOUS_BEAR_ARGUMENT = dict(processed)
+        return processed
 
     market_summary = format_for_bear(market_snapshot, weights=weights)
 
@@ -204,21 +266,29 @@ def generate_bear_argument(market_snapshot: MarketSnapshot, round_number: int, m
             pass
 
     try:
-        response = BEAR_CHAIN.invoke(
-            {
-                "market_data": market_summary,
-                "format_instructions": _init_parser.get_format_instructions(),
-            }
-        )
-        validated = BearAgentOutput.model_validate(response)
-        return _post_process_argument(validated.model_dump(), market_snapshot)
+        invoke_payload = {
+            "market_data": market_summary,
+            "format_instructions": _init_parser.get_format_instructions(),
+        }
+        prompt_value = PROMPT_TEMPLATE.format_prompt(**invoke_payload)
+        raw_output = LLM.invoke(prompt_value)
+        raw_content = getattr(raw_output, "content", str(raw_output))
+
+        if RETRY_PARSER is not None:
+            parsed = RETRY_PARSER.parse_with_prompt(raw_content, prompt_value)
+        else:
+            parsed = PARSER.parse(raw_content)
+
+        sanitized = sanitize_argument(parsed if isinstance(parsed, dict) else {})
+        validated = BearAgentOutput.model_validate(sanitized)
+        processed = _post_process_argument(validated.model_dump(), market_snapshot)
+        processed = sanitize_argument(processed)
+        _PREVIOUS_BEAR_ARGUMENT = dict(processed)
+        return processed
     except Exception as exc:  # noqa: BLE001 - includes Groq transport/model errors and parser failures
-        fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
-        fallback["argument"] = (
-            f"Round {round_number}: unable to generate full bearish analysis due to model or parser error "
-            f"({type(exc).__name__}). Defaulting to low-confidence output."
-        )
-        return _post_process_argument(fallback, market_snapshot)
+        fallback = _fallback_using_previous_round(round_number, type(exc).__name__)
+        processed = _post_process_argument(fallback, market_snapshot)
+        return sanitize_argument(processed)
 
 
 def publish_to_judge(argument_dict: dict[str, Any], round_number: int) -> bool:

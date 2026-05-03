@@ -10,13 +10,13 @@ contract ConvictionTracker {
         uint256 timestamp;
     }
 
-    address public owner;
+    address immutable public owner;
     address public judgeAgent;
     uint256 public currentBullScore = 50;
     uint256 public currentBearScore = 50;
     uint256 public currentRound;
-    uint256 public winThreshold;
-    uint256 public maxRounds = 20;
+    uint256 immutable public winThreshold;
+    uint256 constant public maxRounds = 20;
     bool public debateActive;
     bool public settlementTriggered;
     RoundResult[] public roundHistory;
@@ -34,9 +34,10 @@ contract ConvictionTracker {
         uint256 winningRound
     );
     event DebateSessionStarted(uint256 winThreshold, uint256 timestamp);
-    event JudgeAgentUpdated(address oldJudge, address newJudge);
+    event JudgeAgentUpdated(address indexed oldJudge, address indexed newJudge);
 
     constructor(address _judgeAgent, uint256 _winThreshold) {
+        require(_judgeAgent != address(0), "Invalid judge address");
         owner = msg.sender;
         judgeAgent = _judgeAgent;
         winThreshold = _winThreshold == 0 ? 70 : _winThreshold;
@@ -57,6 +58,8 @@ contract ConvictionTracker {
         uint256 bearScore,
         uint256 roundNumber
     ) external onlyJudge {
+        require(bullScore <= 100, "Bull score must be between 0 and 100");
+        require(bearScore <= 100, "Bear score must be between 0 and 100");
         require(debateActive, "Debate is not active");
         require(!settlementTriggered, "Settlement already triggered");
         require(roundNumber == currentRound + 1, "Invalid round number");
@@ -128,6 +131,7 @@ contract ConvictionTracker {
     }
 
     function updateJudgeAgent(address newJudgeAgent) external onlyOwner {
+        require(newJudgeAgent != address(0), "Invalid judge address");
         address oldJudge = judgeAgent;
         judgeAgent = newJudgeAgent;
         emit JudgeAgentUpdated(oldJudge, newJudgeAgent);

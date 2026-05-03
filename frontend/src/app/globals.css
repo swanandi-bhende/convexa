@@ -1,25 +1,29 @@
 @import "tailwindcss";
 
 :root {
-  /* Design tokens from Gallery Editorial (editorial, warm neutrals) */
-  --surface: #fff8f7;
-  --surface-container-low: #fff0f0;
-  --surface-container-high: #f5e4e4;
-  --surface-container-highest: #f0dfde;
-  --surface-dim: #e7d6d6;
+  /* Design tokens: bright, spacious, market-semantics */
+  --surface: #ffffff;
+  --surface-container-low: #f7f9fc;
+  --surface-container-high: #eef2f7;
+  --surface-container-highest: #e1e7ef;
+  --surface-dim: #dbe3ed;
   --background: var(--surface);
-  --on-surface: #22191a;
-  --on-surface-variant: #524343;
-  --primary: #864f51;
-  --primary-container: #a26769;
-  --secondary: #8d4861;
-  --tertiary: #6d5751;
-  --outline-variant: #d6c2c1;
-  --surface-tint: #864f51;
-  --panel-elev: rgba(34,25,26,0.04);
-  --editorial-gradient-start: #864f51;
-  --editorial-gradient-end: #a26769;
+  --on-surface: #1a1f2b;
+  --on-surface-variant: #556176;
+  --primary: #3f70ff;
+  --primary-container: #7a5cff;
+  --secondary: #f3653a;
+  --tertiary: #ffb347;
+  --outline-variant: #d3dbe7;
+  --surface-tint: #3f70ff;
+  --panel-elev: rgba(33, 42, 60, 0.08);
+  --editorial-gradient-start: #3f70ff;
+  --editorial-gradient-end: #7a5cff;
   --on-primary: #ffffff;
+  --bull-500: #3f70ff;
+  --bear-500: #f3653a;
+  --accent-victory: #18c46b;
+  --accent-caution: #f0b35f;
 }
 
 @theme inline {
@@ -48,7 +52,9 @@ html {
 }
 
 body {
-  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-container-low) 45%, var(--surface-dim) 100%);
+  background: radial-gradient(circle at top right, #eaf0ff 0%, transparent 35%),
+    radial-gradient(circle at top left, #fff1ea 0%, transparent 30%),
+    linear-gradient(180deg, var(--surface) 0%, var(--surface-container-low) 50%, var(--surface-dim) 100%);
   color: var(--on-surface);
   font-family: var(--font-body), sans-serif;
 }

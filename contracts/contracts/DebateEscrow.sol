@@ -7,8 +7,8 @@ contract DebateEscrow {
         BEAR
     }
 
-    address public owner;
-    address public settlementExecutor;
+    address immutable public owner;
+    address immutable public settlementExecutor;
 
     bool public debateActive;
     uint256 public debateStartTime;
@@ -24,6 +24,7 @@ contract DebateEscrow {
     event DebatePaused(string reason);
 
     constructor(address _settlementExecutor) {
+        require(_settlementExecutor != address(0), "Invalid executor address");
         owner = msg.sender;
         settlementExecutor = _settlementExecutor;
     }
@@ -75,35 +76,49 @@ contract DebateEscrow {
     }
 
     function settleSide(Side winner) external onlyExecutor {
-        debateActive = false;
-
+        // CHECKS: Validate preconditions
+        require(debateActive, "Debate is not active");
+        
         Side loser = winner == Side.BULL ? Side.BEAR : Side.BULL;
         uint256 winnerPool = totalStaked[winner];
         uint256 loserPool = totalStaked[loser];
-        uint256 totalPayout = winnerPool + loserPool;
-
         require(winnerPool > 0, "No stakes on winning side");
-
-        for (uint256 i = 0; i < stakers.length; i++) {
-            address staker = stakers[i];
-            uint256 winnerStake = userStakes[staker][winner];
-
-            if (winnerStake > 0) {
-                uint256 share = (winnerStake * loserPool) / winnerPool;
-                uint256 payout = winnerStake + share;
-                (bool sent, ) = payable(staker).call{value: payout}("");
-                require(sent, "Payout transfer failed");
-            }
-
+        
+        // EFFECTS: Update all state variables BEFORE external calls
+        // First, save all winner stakes before clearing (necessary for later payout calculation)
+        address[] memory stakersSnapshot = stakers;
+        uint256[] memory winnerStakes = new uint256[](stakersSnapshot.length);
+        
+        for (uint256 i = 0; i < stakersSnapshot.length; i++) {
+            winnerStakes[i] = userStakes[stakersSnapshot[i]][winner];
+        }
+        
+        debateActive = false;
+        uint256 totalPayout = winnerPool + loserPool;
+        
+        // Clear all user stakes and pool totals
+        for (uint256 i = 0; i < stakersSnapshot.length; i++) {
+            address staker = stakersSnapshot[i];
             userStakes[staker][Side.BULL] = 0;
             userStakes[staker][Side.BEAR] = 0;
         }
-
+        
         totalStaked[Side.BULL] = 0;
         totalStaked[Side.BEAR] = 0;
         delete stakers;
-
+        
+        // Emit event before external calls
         emit Settled(winner, totalPayout);
+        
+        // INTERACT: Make external calls LAST
+        for (uint256 i = 0; i < stakersSnapshot.length; i++) {
+            if (winnerStakes[i] > 0) {
+                uint256 share = (winnerStakes[i] * loserPool) / winnerPool;
+                uint256 payout = winnerStakes[i] + share;
+                (bool sent, ) = payable(stakersSnapshot[i]).call{value: payout}("");
+                require(sent, "Payout transfer failed");
+            }
+        }
     }
 
     function getStakeInfo()

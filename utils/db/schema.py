@@ -400,3 +400,66 @@ class GasPriceHistory(Base):
     session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     gas_price_gwei: Mapped[float] = mapped_column(Float, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class StressTestResult(Base):
+    """Stores one evaluation record per round of the 50-round stress test."""
+
+    __tablename__ = "stress_test_results"
+    __table_args__ = (
+        CheckConstraint("judge_bull_score >= 0 AND judge_bull_score <= 100", name="ck_stress_test_bull_score"),
+        CheckConstraint("judge_bear_score >= 0 AND judge_bear_score <= 100", name="ck_stress_test_bear_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+    market_condition: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    bull_argument_text: Mapped[str] = mapped_column(Text, nullable=False)
+    bear_argument_text: Mapped[str] = mapped_column(Text, nullable=False)
+    bull_metrics_cited: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
+    bear_metrics_cited: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
+    metric_overlap_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    bull_json_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    bear_json_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    judge_bull_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    judge_bear_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    judge_winner: Mapped[str] = mapped_column(String(8), nullable=False)
+    judge_reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    conviction_delta: Mapped[float] = mapped_column(Float, nullable=False)
+    conviction_delta_from_prev: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bull_confidence: Mapped[int] = mapped_column(Integer, nullable=False)
+    bear_confidence: Mapped[int] = mapped_column(Integer, nullable=False)
+    qualitative_notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    groq_latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class StressTestValidation(Base):
+    """Stores post-fix validation rounds for stress test comparisons."""
+
+    __tablename__ = "stress_test_validation"
+    __table_args__ = (
+        CheckConstraint("judge_bull_score >= 0 AND judge_bull_score <= 100", name="ck_stress_validation_bull_score"),
+        CheckConstraint("judge_bear_score >= 0 AND judge_bear_score <= 100", name="ck_stress_validation_bear_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    validation_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    market_condition: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    bull_argument_text: Mapped[str] = mapped_column(Text, nullable=False)
+    bear_argument_text: Mapped[str] = mapped_column(Text, nullable=False)
+    bull_metrics_cited: Mapped[str] = mapped_column(Text, nullable=False)
+    bear_metrics_cited: Mapped[str] = mapped_column(Text, nullable=False)
+    metric_overlap_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    bull_json_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    bear_json_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    judge_bull_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    judge_bear_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    judge_winner: Mapped[str] = mapped_column(String(8), nullable=False)
+    judge_reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    conviction_delta: Mapped[float] = mapped_column(Float, nullable=False)
+    bull_conviction: Mapped[float] = mapped_column(Float, nullable=False)
+    bear_conviction: Mapped[float] = mapped_column(Float, nullable=False)
+    qualitative_notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)

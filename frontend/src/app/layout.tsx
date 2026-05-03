@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Manrope, Work_Sans, IBM_Plex_Mono } from "next/font/google";
 import { Providers } from "@/components/Providers";
+import { Header } from "@/components/Header";
+import { Sidebar } from "@/components/Sidebar";
 import "./globals.css";
 
 const displayFont = Manrope({
@@ -22,8 +24,8 @@ const monoFont = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mercator",
-  description: "A clean on-chain debate dashboard for live conviction updates.",
+  title: "Convexa",
+  description: "Autonomous market debate dashboard with live conviction tracking.",
 };
 
 export default function RootLayout({
@@ -37,7 +39,13 @@ export default function RootLayout({
       className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <Providers>{children}</Providers>
+        <Providers>
+          <Header />
+          <div className="mx-auto flex w-full max-w-[1400px] flex-1">
+            <Sidebar />
+            <main className="w-full px-6 py-8 lg:px-10 lg:py-10">{children}</main>
+          </div>
+        </Providers>
       </body>
     </html>
   );

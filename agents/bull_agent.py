@@ -18,18 +18,31 @@ from langchain_core.runnables import Runnable
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field, ValidationError, conint
 
-
-SYSTEM_PROMPT = (
-    "You are a Bull analyst specializing in onchain market analysis. "
-    "You will receive real token market data each round. "
-    "Your job is to construct the most compelling bullish argument supported by the data provided. "
-    "You must output ONLY valid JSON with exactly three fields: argument (a 2-3 sentence bullish case citing specific numbers from the data), confidence (an integer 0-100 representing how strongly the data supports a bullish thesis), and keyMetrics (a list of 2-4 strings each naming a specific metric and its value that supports your argument). Never output anything outside the JSON object. Never add markdown formatting or code fences."
-)
+try:
+    from langchain.output_parsers import RetryOutputParser
+except Exception:  # noqa: BLE001
+    RetryOutputParser = None
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def _load_system_prompt() -> str:
+    prompt_path = PROJECT_ROOT / "agents" / "prompts" / "bull_system_prompt_v1.txt"
+    raw = prompt_path.read_text(encoding="utf-8")
+    # Allow metadata/comment header in prompt file while keeping runtime prompt clean.
+    lines = raw.splitlines()
+    body_start = 0
+    for idx, line in enumerate(lines):
+        if line.strip().startswith("PROMPT_START"):
+            body_start = idx + 1
+            break
+    return "\n".join(lines[body_start:]).strip()
+
+
+SYSTEM_PROMPT = _load_system_prompt()
 
 from utils.db_manager import init_database, insert_bull_round, upsert_round_comparison_from_bull
 from utils.market_data import MarketSnapshot, fetch_snapshot, format_for_bull
@@ -68,12 +81,15 @@ PROMPT_TEMPLATE = ChatPromptTemplate.from_messages(
 )
 
 LLM = ChatGroq(
-    model="llama3-70b-8192",
+    model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
     temperature=0.3,
 )
 
 PARSER = JsonOutputParser(pydantic_object=BullAgentOutput)
 BULL_CHAIN: Runnable[dict[str, Any], dict[str, Any]] = PROMPT_TEMPLATE | LLM | PARSER
+RETRY_PARSER = (
+    RetryOutputParser.from_llm(parser=PARSER, llm=LLM) if RetryOutputParser is not None else None
+)
 
 
 DEFAULT_FALLBACK_ARGUMENT = {
@@ -85,6 +101,8 @@ DEFAULT_FALLBACK_ARGUMENT = {
     ],
 }
 
+_PREVIOUS_BULL_ARGUMENT: dict[str, Any] | None = None
+
 
 def _is_specific_metric(metric: str) -> bool:
     return any(char.isdigit() for char in metric)
@@ -92,10 +110,10 @@ def _is_specific_metric(metric: str) -> bool:
 
 def _default_key_metrics(snapshot: MarketSnapshot) -> list[str]:
     return [
-        f"24h price change: {snapshot.price_change_24h_percent:.2f}%",
-        f"24h volume delta: {snapshot.volume_delta_percent:.2f}%",
-        f"current price: {snapshot.current_price:.6f}",
-        f"24h baseline price: {snapshot.price_24h_ago:.6f}",
+        f"large inflow count: {snapshot.large_inflow_count}",
+        f"net wallet flow count: {snapshot.net_wallet_flow_count}",
+        f"recent lp additions usd: {snapshot.recent_lp_additions_usd:.2f}",
+        f"lp net flow usd: {snapshot.lp_net_flow_usd:.2f}",
     ]
 
 
@@ -178,6 +196,52 @@ def _post_process_argument(payload: dict[str, Any], snapshot: MarketSnapshot) ->
     }
 
 
+def sanitize_argument(raw_dict: dict[str, Any]) -> dict[str, Any]:
+    argument = str(raw_dict.get("argument", "")).strip()
+    if len(argument) > 500:
+        argument = argument[:500]
+
+    confidence_value = raw_dict.get("confidence", 50)
+    try:
+        confidence = int(confidence_value)
+    except (TypeError, ValueError):
+        confidence = 50
+    confidence = max(0, min(100, confidence))
+
+    metrics = raw_dict.get("keyMetrics", [])
+    if not isinstance(metrics, list):
+        metrics = [str(metrics)] if metrics is not None else []
+    normalized_metrics = [str(item) for item in metrics if str(item).strip()]
+
+    return {
+        "argument": argument,
+        "confidence": confidence,
+        "keyMetrics": normalized_metrics,
+    }
+
+
+def _fallback_using_previous_round(round_number: int, reason: str) -> dict[str, Any]:
+    if _PREVIOUS_BULL_ARGUMENT is not None:
+        reused = sanitize_argument(dict(_PREVIOUS_BULL_ARGUMENT))
+        reused["confidence"] = max(0, int(reused.get("confidence", 50)) - 20)
+        reused["argument"] = (
+            f"Round {round_number}: reusing prior bullish argument because JSON generation failed "
+            f"({reason}). {reused.get('argument', '')}"
+        ).strip()
+        if len(reused["argument"]) > 500:
+            reused["argument"] = reused["argument"][:500]
+        if not reused.get("keyMetrics"):
+            reused["keyMetrics"] = ["fallback: previous-round reuse"]
+        return reused
+
+    fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
+    fallback["argument"] = (
+        f"Round {round_number}: unable to generate bullish JSON output ({reason}), "
+        "using conservative fallback."
+    )
+    return sanitize_argument(fallback)
+
+
 def _is_strongly_negative_for_bull(snapshot: MarketSnapshot) -> bool:
     price_strongly_down = snapshot.price_change_24h_percent <= -5.0
     outflows_dominant = snapshot.large_outflow_count >= 10
@@ -196,6 +260,8 @@ def _apply_bull_confidence_cap(argument_dict: dict[str, Any], snapshot: MarketSn
 
 def generate_bull_argument(market_snapshot: MarketSnapshot, round_number: int, memory: AgentMemory | None = None, weights: dict | None = None) -> dict[str, Any]:
     """Generate a validated bullish argument for one round with robust fallback behavior."""
+    global _PREVIOUS_BULL_ARGUMENT
+
     if DRY_RUN:
         fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
         fallback["argument"] = (
@@ -203,7 +269,9 @@ def generate_bull_argument(market_snapshot: MarketSnapshot, round_number: int, m
             f"Price change {market_snapshot.price_change_24h_percent:.2f}% and volume delta {market_snapshot.volume_delta_percent:.2f}% were reviewed."
         )
         fallback["confidence"] = 55 if market_snapshot.price_change_24h_percent <= 0 else 45
-        processed = _post_process_argument(fallback, market_snapshot)
+        processed = _post_process_argument(sanitize_argument(fallback), market_snapshot)
+        processed = sanitize_argument(processed)
+        _PREVIOUS_BULL_ARGUMENT = dict(processed)
         return _apply_bull_confidence_cap(processed, market_snapshot)
 
     market_summary = format_for_bull(market_snapshot, weights=weights)
@@ -218,38 +286,39 @@ def generate_bull_argument(market_snapshot: MarketSnapshot, round_number: int, m
             pass
 
     try:
-        response = BULL_CHAIN.invoke(
-            {
-                "market_data": market_summary,
-                "format_instructions": _init_parser.get_format_instructions(),
-            }
-        )
-        validated = BullAgentOutput.model_validate(response)
+        invoke_payload = {
+            "market_data": market_summary,
+            "format_instructions": _init_parser.get_format_instructions(),
+        }
+        prompt_value = PROMPT_TEMPLATE.format_prompt(**invoke_payload)
+        raw_output = LLM.invoke(prompt_value)
+        raw_content = getattr(raw_output, "content", str(raw_output))
+
+        if RETRY_PARSER is not None:
+            parsed = RETRY_PARSER.parse_with_prompt(raw_content, prompt_value)
+        else:
+            parsed = PARSER.parse(raw_content)
+
+        sanitized = sanitize_argument(parsed if isinstance(parsed, dict) else {})
+        validated = BullAgentOutput.model_validate(sanitized)
         processed = _post_process_argument(validated.model_dump(), market_snapshot)
+        processed = sanitize_argument(processed)
+        _PREVIOUS_BULL_ARGUMENT = dict(processed)
         return _apply_bull_confidence_cap(processed, market_snapshot)
     except httpx.HTTPError as exc:
-        fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
-        fallback["argument"] = (
-            f"Round {round_number}: unable to generate full bullish analysis due to model network error "
-            f"({type(exc).__name__}). Defaulting to low-confidence output."
-        )
+        fallback = _fallback_using_previous_round(round_number, f"network:{type(exc).__name__}")
         processed = _post_process_argument(fallback, market_snapshot)
+        processed = sanitize_argument(processed)
         return _apply_bull_confidence_cap(processed, market_snapshot)
     except (OutputParserException, ValidationError, ValueError, TypeError) as exc:
-        fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
-        fallback["argument"] = (
-            f"Round {round_number}: unable to generate full bullish analysis due to parser or schema error "
-            f"({type(exc).__name__}). Defaulting to low-confidence output."
-        )
+        fallback = _fallback_using_previous_round(round_number, f"parser:{type(exc).__name__}")
         processed = _post_process_argument(fallback, market_snapshot)
+        processed = sanitize_argument(processed)
         return _apply_bull_confidence_cap(processed, market_snapshot)
     except Exception as exc:  # noqa: BLE001 - non-network/runtime fallback
-        fallback = dict(DEFAULT_FALLBACK_ARGUMENT)
-        fallback["argument"] = (
-            f"Round {round_number}: unable to generate full bullish analysis due to unexpected runtime error "
-            f"({type(exc).__name__}). Defaulting to low-confidence output."
-        )
+        fallback = _fallback_using_previous_round(round_number, f"runtime:{type(exc).__name__}")
         processed = _post_process_argument(fallback, market_snapshot)
+        processed = sanitize_argument(processed)
         return _apply_bull_confidence_cap(processed, market_snapshot)
 
 

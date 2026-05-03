@@ -79,6 +79,26 @@ def resolve_token_decimals(token: str) -> int:
     return TOKEN_DECIMALS_BY_SYMBOL.get(token.upper(), 18)
 
 
+# Metric sentiment polarity map: defines which side each metric naturally supports
+# This prevents metric overlap by explicitly assigning sentiment direction to each metric
+METRIC_SENTIMENT_MAP: dict[str, str] = {
+    # Directional metrics: both agents can cite but must interpret in their favor
+    "price_change_24h_percent": "directional",
+    "price_change_2h_percent": "directional",
+    "volume_delta_percent": "directional",
+    "funding_rate_proxy": "directional",
+    "lp_net_flow_usd": "directional",
+    
+    # Bullish-primary metrics: belong primarily to Bull's argument
+    "large_inflow_count": "bullish_primary",
+    "recent_lp_additions_usd": "bullish_primary",
+    "net_wallet_flow_count": "bullish_primary",
+    
+    # Bearish-primary metrics: belong primarily to Bear's argument
+    "large_outflow_count": "bearish_primary",
+    "recent_lp_removals_usd": "bearish_primary",
+}
+
 # AXL Node Identities: peer IDs and public keys for message validation
 # These are loaded from environment with fallback defaults for testing/demo
 AXL_NODE_PEER_IDS: dict[str, str] = {

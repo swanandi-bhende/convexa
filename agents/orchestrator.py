@@ -807,46 +807,11 @@ def _get_axl_binary_path() -> Path:
 
 
 def startup_axl_nodes(dry_run: bool) -> None:
-    del dry_run
-
-    axl_binary = _get_axl_binary_path()
-    log_dir = PROJECT_ROOT / "axl-nodes" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    if not axl_binary.exists():
-        raise RuntimeError(f"AXL binary not found at {axl_binary}")
-
-    AXL_NODE_PROCESSES.clear()
-    AXL_NODE_LOG_HANDLES.clear()
-
-    for node_name, config in AXL_NODE_CONFIGS.items():
-        node_dir = config["cwd"]
-        private_key_path = node_dir / "data" / "private.pem"
-        private_key_path.parent.mkdir(parents=True, exist_ok=True)
-        if not private_key_path.exists():
-            subprocess.run(
-                ["openssl", "genpkey", "-algorithm", "ed25519", "-out", str(private_key_path)],
-                check=True,
-            )
-
-        log_path = config["log"]
-        log_handle = log_path.open("a", encoding="utf-8")
-        AXL_NODE_LOG_HANDLES.append(log_handle)
-        process = subprocess.Popen(
-            [str(axl_binary), "-config", "node-config.json"],
-            cwd=str(node_dir),
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-        )
-        AXL_NODE_PROCESSES.append(process)
-
-    wait_for_axl_ready(timeout_seconds=30)
-
+    print("[ORCHESTRATOR] Skipping AXL node startup (macOS binary bypassed for Render compatibility)")
+    return
 
 def wait_for_axl_ready(timeout_seconds: int = 30) -> None:
-    deadline = time.monotonic() + float(timeout_seconds)
-    node_urls = {name: str(config["url"]) for name, config in AXL_NODE_CONFIGS.items()}
-    last_status: dict[str, str] = {name: "starting" for name in node_urls}
+    return
 
     while time.monotonic() < deadline:
         pending = []

@@ -37,8 +37,9 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <Providers>
           <Header />
           <div className="mx-auto flex w-full max-w-350 flex-1">

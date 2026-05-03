@@ -136,46 +136,83 @@ export function Header({ connectedWallet = "0x13A2...B94f", network = "Unichain 
   };
 
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur">
-      <div className="mx-auto flex w-full items-center justify-between px-6 py-4 lg:px-10" style={{ maxWidth: 1400 }}>
-        <div className="flex items-center gap-3">
+    <header className="sticky top-0 z-30 backdrop-blur-[24px]" style={{ backgroundColor: "rgba(255, 248, 247, 0.7)" }}>
+      {/* Subtle tonal divider instead of border */}
+      <div className="h-px" style={{ background: "linear-gradient(to right, transparent, var(--surface-container-low), transparent)" }} />
+      
+      <div className="mx-auto flex w-full items-center justify-between" style={{ maxWidth: 1400, padding: "1rem 1.5rem 1rem 1.5rem", gap: "1rem" }}>
+        <div className="flex items-center gap-4">
           <div
-            className="h-10 w-10 rounded-xl"
-            style={{ background: "linear-gradient(135deg, #3b82f6 0%, #6366f1 52%, #8b5cf6 100%)" }}
+            className="h-10 w-10 rounded"
+            style={{ background: "linear-gradient(135deg, #864f51 0%, #a26769 100%)" }}
             aria-hidden
           />
           <div>
-            <p className="text-lg font-semibold tracking-tight text-slate-900">Convexa</p>
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Autonomous Debate Engine</p>
+            <p className="text-lg font-semibold tracking-tight" style={{ color: "var(--on-surface)" }}>Convexa</p>
+            <p className="text-xs font-medium uppercase tracking-[0.05em]" style={{ color: "var(--on-surface-variant)" }}>Autonomous Debate Engine</p>
           </div>
         </div>
 
-        <nav className="hidden items-center gap-6 md:flex">
+        <nav className="hidden items-center gap-2 md:flex">
           {navLinks.map((item) => (
             <Link
               key={item.href}
               href={item.href}
-              className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${pathname === item.href ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"}`}
+              className="px-4 py-2 text-sm font-medium transition rounded"
+              style={{
+                backgroundColor: pathname === item.href ? "var(--primary)" : "transparent",
+                color: pathname === item.href ? "var(--on-primary)" : "var(--on-surface)"
+              }}
+              onMouseEnter={(e) => {
+                if (pathname !== item.href) {
+                  e.currentTarget.style.backgroundColor = "var(--surface-container-low)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (pathname !== item.href) {
+                  e.currentTarget.style.backgroundColor = "transparent";
+                }
+              }}
             >
               {item.label}
             </Link>
           ))}
         </nav>
 
-        <div className="flex items-center gap-3 text-xs">
-          <span className="rounded-full bg-emerald-100 px-3 py-1 font-semibold text-emerald-700">{network}</span>
+        <div className="flex items-center gap-3">
+          {/* Network Badge - Secondary Color Anchor */}
+          <span 
+            className="px-4 py-2 text-xs font-semibold uppercase tracking-[0.05em] rounded"
+            style={{ backgroundColor: "var(--secondary)", color: "var(--on-primary)" }}
+          >
+            {network}
+          </span>
+          
+          {/* Wallet Button - Primary Gradient */}
           <button
             type="button"
             onClick={connectWallet}
             disabled={connecting}
-            className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-70"
+            className="px-4 py-2 text-xs font-semibold uppercase tracking-[0.05em] rounded transition disabled:cursor-not-allowed disabled:opacity-70"
+            style={{
+              background: !connecting && !walletAddress ? "linear-gradient(135deg, var(--primary) 0%, var(--primary-container) 100%)" : "var(--surface-container-high)",
+              color: !connecting && !walletAddress ? "var(--on-primary)" : "var(--on-surface)"
+            }}
             title={walletAddress ?? connectedWallet}
           >
             {connecting ? "Connecting..." : walletAddress ? walletLabel : "Connect Wallet"}
           </button>
         </div>
       </div>
-      {walletError ? <p className="px-6 pb-2 text-xs text-rose-600 lg:px-10">{walletError}</p> : null}
+      
+      {/* Error message with warning color */}
+      {walletError ? (
+        <div className="px-6 pb-3 lg:px-10">
+          <p className="text-xs" style={{ color: "var(--bear-500)" }}>
+            {walletError}
+          </p>
+        </div>
+      ) : null}
     </header>
   );
 }

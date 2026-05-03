@@ -9,6 +9,7 @@ import { MarketSnapshot } from "@/components/MarketSnapshot";
 import { ConvictionTracker } from "@/components/ConvictionTracker";
 import { RoundHistory } from "@/components/RoundHistory";
 import { useDebateData } from "@/hooks/useDebateData";
+import { MegaBreadcrumb } from "@/components/MegaBreadcrumb";
 
 export default function DebatePage() {
   const params = useParams<{ debateId: string }>();
@@ -50,11 +51,11 @@ export default function DebatePage() {
   if (loading) {
     return (
       <section className="space-y-4" aria-live="polite" aria-busy="true">
-        <div className="h-8 w-48 animate-pulse rounded bg-slate-200" />
+        <div className="h-8 w-48 animate-pulse rounded bg-surface-container-high" />
         <div className="grid gap-4 lg:grid-cols-3">
-          <div className="h-72 animate-pulse rounded-3xl bg-slate-200" />
-          <div className="h-72 animate-pulse rounded-3xl bg-slate-200" />
-          <div className="h-72 animate-pulse rounded-3xl bg-slate-200" />
+          <div className="h-72 animate-pulse rounded bg-surface-container-high" />
+          <div className="h-72 animate-pulse rounded bg-surface-container-high" />
+          <div className="h-72 animate-pulse rounded bg-surface-container-high" />
         </div>
       </section>
     );
@@ -62,7 +63,7 @@ export default function DebatePage() {
 
   if (error || !state || !market) {
     return (
-      <section className="rounded-2xl bg-rose-50 p-6 text-rose-700">
+      <section className="bg-primary/10 p-6 text-primary border-l-4 border-primary slide-up-fade">
         <p className="font-semibold">Unable to load debate</p>
         <p className="mt-2 text-sm">{error ?? "Unknown error"}</p>
       </section>
@@ -71,10 +72,10 @@ export default function DebatePage() {
 
   const feedBadge =
     feedMode === "live"
-      ? { label: "Live", tone: "bg-emerald-100 text-emerald-700" }
+      ? { label: "Live", tone: "text-bull-500" }
       : feedMode === "replay"
-        ? { label: "Replay", tone: "bg-sky-100 text-sky-700" }
-        : { label: "Polling", tone: "bg-amber-100 text-amber-700" };
+        ? { label: "Replay", tone: "text-primary" }
+        : { label: "Polling", tone: "text-tertiary" };
 
   const secondsAgo = Math.max(0, Math.round((Date.now() - lastUpdateAt) / 1000));
   const updateHint =
@@ -85,27 +86,29 @@ export default function DebatePage() {
         : "Polling fallback is active; waiting for the next backend refresh.";
 
   return (
-    <div className="space-y-8">
-      <section className="rounded-3xl bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.08)] sm:p-8">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="max-w-7xl mx-auto space-y-12 pb-32 slide-up-fade">
+      <MegaBreadcrumb />
+
+      <section className="tonal-card p-8 sm:p-12 relative overflow-hidden group">
+        <div className="absolute -left-12 -top-12 w-32 h-32 bg-primary/5 rounded-full transition-transform duration-700 group-hover:scale-150" />
+        <div className="relative z-10 flex flex-wrap items-end justify-between gap-6">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">Live Debate</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Session {params.debateId}</h1>
+            <p className="label-md text-on-surface-variant">Live Debate Session</p>
+            <h1 className="display-lg text-on-surface mt-2">{params.debateId}</h1>
           </div>
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em]">
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">Round {currentRound}/{totalRounds}</span>
-            <span className={`rounded-full px-3 py-1 ${feedBadge.tone}`}>
-              {feedBadge.label}
-            </span>
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-3 label-md">
+              <span className="text-on-surface-variant">Round {currentRound}/{totalRounds}</span>
+              <span className={feedBadge.tone}>
+                {feedBadge.label}
+              </span>
+            </div>
+            <p className="text-sm text-on-surface-variant">{updateHint} Last update {secondsAgo}s ago.</p>
           </div>
-        </div>
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-          <p>{updateHint}</p>
-          <p className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">Last update {secondsAgo}s ago</p>
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[1fr_380px_1fr]">
+      <section className="grid gap-8 xl:grid-cols-[1fr_380px_1fr]">
         <BullCard
           name="Bull Agent"
           argument={dynamicNarrative.bull}
@@ -118,7 +121,7 @@ export default function DebatePage() {
           ]}
         />
 
-        <div className="space-y-6">
+        <div className="space-y-8 flex flex-col justify-center">
           <MarketSnapshot snapshot={market} />
           <ConvictionTracker bullScore={state.currentBullScore} bearScore={state.currentBearScore} threshold={70} />
         </div>
@@ -136,14 +139,14 @@ export default function DebatePage() {
         />
       </section>
 
-      <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.09)]">
-        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">Why This Round Moved</p>
-        <p className="mt-3 text-sm leading-7 text-slate-700">
-          Judge weighting currently favors <span className="font-semibold text-slate-900">{leader}</span>. The conviction spread is <span className="font-semibold text-slate-900">{spread}</span> points, and settlement finalization is evaluated once either side reaches the threshold shown in Conviction Tracker.
+      <section className="bg-surface-container-highest p-8">
+        <p className="label-md text-secondary mb-4">Orchestrator Analysis</p>
+        <p className="body-lg text-on-surface-variant">
+          Judge weighting currently favors <strong className="text-on-surface">{leader}</strong>. The conviction spread is <strong className="text-on-surface">{spread}</strong> points. The Orchestrator evaluates settlement finalization once either side reaches the threshold shown in Conviction Tracker.
         </p>
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
+      <section className="grid gap-8 lg:grid-cols-[1fr_1.2fr]">
         <JudgeVerdict
           pending={state.currentBullScore === state.currentBearScore}
           round={currentRound}

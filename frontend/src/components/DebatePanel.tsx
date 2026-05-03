@@ -53,59 +53,71 @@ export function DebatePanel({ side }: DebatePanelProps) {
     return state.roundHistory.find((round) => round.roundNumber === state.currentRound) ?? state.roundHistory[0];
   }, [state.currentRound, state.roundHistory]);
 
-  const scoreTone = score >= 60 ? "bg-surface text-emerald-700" : score >= 40 ? "bg-surface text-amber-700" : "bg-surface text-rose-700";
   const panelAnimation = isBull ? "panel-highlight-bull" : "panel-highlight-bear";
-  const sectionColor = isBull ? "from-primary/18 via-primary-container/8 to-transparent" : "from-secondary/18 via-tertiary/8 to-transparent";
-  const headerColor = isBull ? "editorial-gradient" : "bg-linear-to-r from-secondary to-tertiary";
   const label = isBull ? "Bull" : "Bear";
   const emoji = isBull ? "🐂" : "🐻";
   const keyMetrics = buildKeyMetrics(side, state.currentBullScore, state.currentBearScore, stakeTotal);
   const timestampLabel = roundEntry ? formatTimestamp(roundEntry.timestamp) : "Awaiting first round";
+  const accentColor = isBull ? "text-bull-500" : "text-bear-500";
+  const accentBg = isBull ? "bg-bull-500/10" : "bg-bear-500/10";
 
   return (
-    <section key={highlightKey} className={`glass-card-strong overflow-hidden rounded-4xl ${highlightKey > 0 ? panelAnimation : ""}`}>
-      <div className={`${headerColor} px-5 py-4 sm:px-6`}>
+    <section key={highlightKey} className={`tonal-card overflow-hidden relative ${highlightKey > 0 && typing ? panelAnimation : ""}`}>
+      {/* Dynamic Background Glow */}
+      <div className={`absolute top-0 right-0 w-64 h-64 ${accentBg} opacity-50 rounded-bl-full pointer-events-none transition-all duration-700`} />
+
+      <div className="relative z-10 px-8 py-8 border-b border-outline-variant">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="flex items-center gap-3 text-on-primary">
-              <span className="text-2xl sm:text-3xl">{emoji}</span>
+            <div className="flex items-center gap-4">
+              <span className="text-4xl drop-shadow-sm">{emoji}</span>
               <div>
-                <p className="text-xs uppercase tracking-[0.35em] text-on-primary/75">{label} debate panel</p>
-                <h3 className="font-display text-4xl sm:text-5xl">{label}</h3>
+                <div className="flex items-center gap-3 mb-1">
+                  <p className="label-md text-on-surface-variant">{label} Agent</p>
+                  {typing && <span className="bg-primary/10 px-2 py-0.5 label-md text-primary animate-pulse">Orchestrator: Collecting Argument</span>}
+                </div>
+                <h3 className={`display-lg ${accentColor}`}>{label}</h3>
               </div>
             </div>
-            <p className="mt-3 max-w-lg text-sm text-on-primary/80">The current argument and score update when the chain emits a new ConvictionUpdated event.</p>
           </div>
 
-          <div className="rounded-[18px] bg-surface/95 px-4 py-3 text-right text-on-surface">
-            <p className="text-[10px] uppercase tracking-[0.4em] text-on-surface-variant">Confidence</p>
-            <p className="font-display text-4xl sm:text-5xl">{score}</p>
-            <p className="text-xs uppercase tracking-[0.3em] text-on-surface-variant">of {score + opposingScore}</p>
+          <div className="bg-surface-container-highest px-6 py-4 text-right">
+            <p className="label-md text-on-surface-variant">Confidence</p>
+            <p className="display-lg text-on-surface">{score}</p>
+            <p className="label-md text-on-surface-variant mt-1">out of {score + opposingScore}</p>
           </div>
         </div>
       </div>
 
-      <div className={`bg-linear-to-br ${sectionColor} px-5 py-5 sm:px-6 sm:py-6`}>
-        <div className="rounded-3xl bg-surface p-5 sm:p-6">
-          <p className="text-xs uppercase tracking-[0.35em] text-on-surface-variant">Round {state.currentRound || 0} argument</p>
-          <p className="mt-2 min-h-36 text-lg leading-8 text-on-surface sm:text-[1.08rem]">
+      <div className="relative z-10 px-8 py-8 bg-surface">
+        <div className={`p-8 bg-surface-container-low transition-all duration-300 ${typing ? 'shadow-inner' : ''}`}>
+          <p className="label-md text-secondary mb-4 flex items-center gap-3">
+            Round {state.currentRound || 0} argument
+            {typing && <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />}
+          </p>
+          <p className="min-h-[12rem] body-lg text-on-surface">
             {displayText}
-            {typing ? <span className="typewriter-caret align-middle text-current" /> : null}
+            {typing ? <span className="typewriter-caret text-primary" /> : null}
           </p>
         </div>
 
-        <div className="mt-5 flex flex-wrap gap-2">
+        <div className="mt-8 flex flex-wrap gap-4">
           {keyMetrics.map((metric) => (
-            <span key={metric} className="rounded-full bg-surface-container-low px-3 py-1 text-xs uppercase tracking-[0.25em] text-on-surface-variant">
+            <span key={metric} className="bg-surface-container-highest px-4 py-2 label-md text-on-surface-variant">
               {metric}
             </span>
           ))}
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 pt-4 text-sm text-on-surface-variant">
-          <span>{roundEntry ? `Round ${roundEntry.roundNumber} argument` : "Awaiting round data"}</span>
-          <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.35em] ${scoreTone}`}>Judge score {score}</span>
-          <span>{timestampLabel}</span>
+        <div className="mt-8 flex flex-wrap items-center justify-between gap-4 pt-6 border-t border-outline-variant text-sm text-on-surface-variant">
+          <span className="flex items-center gap-2 label-md">
+            <span className="w-2 h-2 rounded-full bg-on-surface-variant" />
+            {roundEntry ? `Round ${roundEntry.roundNumber}` : "Awaiting data"}
+          </span>
+          <span className={`px-4 py-2 label-md ${accentBg} ${accentColor}`}>
+            Judge score: {score}
+          </span>
+          <span className="font-mono text-xs">{timestampLabel}</span>
         </div>
       </div>
     </section>

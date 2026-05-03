@@ -1,30 +1,49 @@
-interface BearCardProps {
+import React from "react";
+
+interface AgentCardProps {
   name: string;
   argument: string;
   confidence: number;
   score: number;
   metrics: string[];
+  isActive?: boolean;
 }
 
-export function BearCard({ name, argument, confidence, score, metrics }: BearCardProps) {
+export function BearCard({ name, argument, confidence, score, metrics, isActive }: AgentCardProps) {
   return (
-    <article
-      className="rounded-3xl p-6 text-white shadow-[0_16px_32px_rgba(33,42,60,0.20)]"
-      style={{ background: "linear-gradient(135deg, #f97316 0%, #ef4444 100%)" }}
-    >
-      <div className="flex items-center justify-between">
-        <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em]">{name}</span>
-        <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-semibold">Confidence {confidence}%</span>
+    <div className={`tonal-card flex flex-col p-8 sm:p-10 ${isActive ? 'agent-speaking bg-surface-container-high scale-[1.01]' : ''}`}>
+      <div className="mb-6 flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center bg-bear-500/10 text-2xl text-bear-500">🐻</div>
+          <div>
+            <h2 className="headline-md text-bear-500">{name}</h2>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="label-md text-on-surface-variant">Agent • Off-Chain</span>
+              {isActive && <span className="live-dot scale-75" style={{ backgroundColor: '#c94040', borderColor: '#c94040' }} />}
+            </div>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="display-lg text-on-surface">{score}</p>
+          <p className="label-md text-on-surface-variant">Score</p>
+        </div>
       </div>
-      <p className="mt-4 text-base leading-7 text-orange-50">{argument}</p>
-      <div className="mt-5 flex items-center gap-2">
-        <p className="text-sm font-semibold text-orange-100">Score {score}</p>
+
+      <div className="mb-8 flex-1">
+        <p className="body-lg text-on-surface border-l-2 border-outline-variant pl-4">
+          {argument}
+        </p>
       </div>
-      <ul className="mt-4 space-y-2 text-sm text-orange-100">
-        {metrics.map((metric) => (
-          <li key={metric}>• {metric}</li>
-        ))}
-      </ul>
-    </article>
+
+      <div className="mt-auto border-t border-outline-variant pt-6">
+        <div className="flex flex-wrap gap-3">
+          {metrics.map((m, i) => (
+            <span key={i} className="bg-surface px-3 py-1 label-md text-on-surface-variant">
+              {m}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

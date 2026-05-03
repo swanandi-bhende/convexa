@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { SettlementStatus } from "@/components/SettlementStatus";
 import { StakeForm } from "@/components/StakeForm";
+import { MegaBreadcrumb } from "@/components/MegaBreadcrumb";
 import {
   getDemoStakeStore,
   markDemoStakeApplied,
@@ -34,52 +35,75 @@ export default function StakePage() {
   const escrowBalanceEth = useMemo(() => 215.42 + bullStakeDelta + bearStakeDelta, [bullStakeDelta, bearStakeDelta]);
 
   return (
-    <div className="space-y-8">
-      <section className="rounded-[2rem] border border-slate-200/70 bg-white p-6 shadow-[0_8px_24px_rgba(33,42,60,0.08)]">
-        <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Stake and Escrow</h1>
-        <p className="mt-2 text-slate-600">Queue Bull/Bear stake intents and watch them progress from queued to applied, with settlement metrics updated in real time.</p>
-      </section>
+    <div className="max-w-6xl mx-auto space-y-24 pb-32 slide-up-fade">
+      <MegaBreadcrumb />
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <StakeForm
-          onSubmit={(side, amount) => {
-            const queued = queueDemoStake(side, amount);
-            setLastMessage(`Queued ${amount.toFixed(3)} ETH on ${side.toUpperCase()} side. Applying to demo state...`);
+      <section className="grid md:grid-cols-2 gap-16 items-start">
+        <div className="space-y-8">
+          <h1 className="display-lg text-on-surface">Stake on Conviction</h1>
+          <p className="body-lg text-on-surface-variant border-l-2 border-outline-variant pl-6">
+            Participate directly in the consensus mechanism. By staking on the Bull or Bear, you are depositing ETH into the <code>DebateEscrow</code> smart contract on Unichain Sepolia.
+          </p>
+          
+          <div className="tonal-card p-8 mt-12 relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-1 h-full bg-secondary group-hover:w-2 transition-all duration-300" />
+            <h3 className="headline-md mb-4 text-secondary">The Settlement Mechanics</h3>
+            <ul className="space-y-4 body-lg text-on-surface-variant">
+              <li className="flex items-start gap-3">
+                <span className="text-secondary mt-1">01.</span>
+                <span><strong>Deposit:</strong> Your stake is locked in the <code>DebateEscrow</code> contract.</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="text-secondary mt-1">02.</span>
+                <span><strong>Orchestration:</strong> The Python Orchestrator monitors the Judge's Conviction Score.</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="text-secondary mt-1">03.</span>
+                <span><strong>Resolution:</strong> The Orchestrator triggers <code>settle()</code>, distributing the opposing side's stake to the winners.</span>
+              </li>
+            </ul>
+          </div>
+        </div>
 
-            window.setTimeout(() => {
-              const applied = markDemoStakeApplied(queued.id);
-              if (applied) {
-                setLastMessage(`Applied ${applied.amount.toFixed(3)} ETH to ${applied.side.toUpperCase()} side. Debate conviction will rebalance.`);
-              }
-            }, 3500);
-          }}
-        />
-        <SettlementStatus
-          escrowBalanceEth={escrowBalanceEth}
-          pendingPayouts={pendingPayouts}
-          contractAddress="0xBB7bD22Aa37E05979c3858540048e99bCa98CEF9"
-        />
-      </div>
+        <div className="bg-surface-container-low p-8 sm:p-12 relative ambient-shadow space-y-8">
+          <StakeForm
+            onSubmit={(side, amount) => {
+              const queued = queueDemoStake(side, amount);
+              setLastMessage(`Queued ${amount.toFixed(3)} ETH on ${side.toUpperCase()} side. Applying to demo state...`);
 
-      <section className="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_8px_24px_rgba(33,42,60,0.08)]">
-        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">Stake Event Feed</p>
-        <div className="mt-3 space-y-2 text-sm">
-          {events.length > 0 ? (
-            events.slice(0, 6).map((event) => (
-              <div key={event.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                <span className="font-medium text-slate-700">{event.side.toUpperCase()} {event.amount.toFixed(3)} ETH</span>
-                <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${event.status === "applied" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                  {event.status}
-                </span>
-              </div>
-            ))
-          ) : (
-            <p className="text-slate-500">No stake events yet. Submit a stake to see queue progression.</p>
-          )}
+              window.setTimeout(() => {
+                const applied = markDemoStakeApplied(queued.id);
+                if (applied) {
+                  setLastMessage(`Applied ${applied.amount.toFixed(3)} ETH to ${applied.side.toUpperCase()} side. Debate conviction will rebalance.`);
+                }
+              }, 3500);
+            }}
+          />
+          <SettlementStatus
+            escrowBalanceEth={escrowBalanceEth}
+            pendingPayouts={pendingPayouts}
+            contractAddress="0xBB7bD22Aa37E05979c3858540048e99bCa98CEF9"
+          />
+          <section className="bg-surface p-5 border border-outline-variant">
+            <p className="label-md text-on-surface-variant mb-4">Stake Event Feed</p>
+            <div className="space-y-2 text-sm">
+              {events.length > 0 ? (
+                events.slice(0, 6).map((event) => (
+                  <div key={event.id} className="flex items-center justify-between bg-surface-container-low px-3 py-2">
+                    <span className="font-medium text-on-surface">{event.side.toUpperCase()} {event.amount.toFixed(3)} ETH</span>
+                    <span className={`px-2 py-0.5 label-md ${event.status === "applied" ? "text-bull-500" : "text-tertiary"}`}>
+                      {event.status}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-on-surface-variant">No stake events yet. Submit a stake to see queue progression.</p>
+              )}
+            </div>
+          </section>
+          <section className="bg-primary/10 text-primary p-4 text-sm body-lg">{lastMessage}</section>
         </div>
       </section>
-
-      <section className="rounded-2xl border border-slate-200/70 bg-slate-950 px-5 py-4 text-sm text-slate-100 shadow-[0_10px_24px_rgba(15,23,42,0.18)]">{lastMessage}</section>
     </div>
   );
 }

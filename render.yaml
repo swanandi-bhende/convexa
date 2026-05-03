@@ -1,10 +1,12 @@
 services:
-  - type: worker
+  - type: web
     name: convexa-backend
     env: docker
     dockerfilePath: Dockerfile
     autoDeploy: true
     envVars:
+      - key: PORT
+        value: 3000
       - key: DEPLOYER_PRIVATE_KEY
         sync: false
       - key: AGENT_WALLET_PRIVATE_KEY

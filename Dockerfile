@@ -21,18 +21,18 @@ COPY contracts/package.json contracts/package-lock.json ./contracts/
 # Install Node dependencies and Python dependencies
 RUN npm install
 RUN cd contracts && npm install
+RUN cd frontend && npm install
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application
 COPY . .
 
-# Compile contracts
+# Compile contracts and build frontend
 RUN cd contracts && npx hardhat compile
+RUN cd frontend && npm run build
 
 # Make the start script executable
 RUN chmod +x start-backend.sh
-RUN chmod +x axl-nodes/start-all.sh
-RUN chmod +x axl-nodes/axl || true
 
 # Command to start the background worker
 CMD ["./start-backend.sh"]

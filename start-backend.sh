@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start the AXL nodes in the background
-echo "Starting AXL nodes..."
-bash axl-nodes/start-all.sh
-
-# Wait a couple of seconds for the nodes to initialize and discover each other
-sleep 3
+# Start the Next.js frontend in the background
+echo "Starting Next.js frontend..."
+cd frontend
+npm start &
+cd ..
 
 # Start the Python orchestrator
 echo "Starting Convexa Orchestrator..."

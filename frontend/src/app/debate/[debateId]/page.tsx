@@ -14,6 +14,39 @@ export default function DebatePage() {
   const params = useParams<{ debateId: string }>();
   const { state, history, market, loading, error, feedMode, lastUpdateAt } = useDebateData();
 
+  const currentRound = state ? Math.max(1, state.currentRound) : 1;
+  const totalRounds = Math.max(currentRound, history.length || currentRound);
+  const currentHistory = history.find((item) => item.roundNumber === currentRound) ?? history[0];
+  const spread = state ? Math.abs(state.currentBullScore - state.currentBearScore) : 0;
+  const leader = !state || state.currentBullScore === state.currentBearScore ? "Tie" : state.currentBullScore > state.currentBearScore ? "Bull" : "Bear";
+
+  const dynamicNarrative = useMemo(() => {
+    if (!state) {
+      return {
+        bull: "Bull agent is waiting for the next actionable signal.",
+        bear: "Bear agent is waiting for the next actionable signal.",
+      };
+    }
+
+    const bullLead = state.currentBullScore - state.currentBearScore;
+    const bearLead = state.currentBearScore - state.currentBullScore;
+
+    const bullArgument =
+      bullLead >= 0
+        ? `Round ${currentRound}: Bull claims order-flow confirmation with a ${bullLead}-point lead and argues that follow-through is now a participation signal, not just price noise.`
+        : `Round ${currentRound}: Bull is in recovery mode, arguing that risk-reward improved after Bear pressure pushed conviction lower.`;
+
+    const bearArgument =
+      bearLead >= 0
+        ? `Round ${currentRound}: Bear highlights fragility in momentum and says upside is thin unless new liquidity appears.`
+        : `Round ${currentRound}: Bear acknowledges short-term strength but argues the move is extended and prone to mean reversion.`;
+
+    return {
+      bull: currentHistory?.bullArgument && currentHistory.bullArgument.trim().length > 20 ? currentHistory.bullArgument : bullArgument,
+      bear: currentHistory?.bearArgument && currentHistory.bearArgument.trim().length > 20 ? currentHistory.bearArgument : bearArgument,
+    };
+  }, [currentHistory?.bearArgument, currentHistory?.bullArgument, currentRound, state]);
+
   if (loading) {
     return (
       <section className="space-y-4" aria-live="polite" aria-busy="true">
@@ -35,32 +68,6 @@ export default function DebatePage() {
       </section>
     );
   }
-
-  const currentRound = Math.max(1, state.currentRound);
-  const totalRounds = Math.max(currentRound, history.length || currentRound);
-  const currentHistory = history.find((item) => item.roundNumber === currentRound) ?? history[0];
-  const spread = Math.abs(state.currentBullScore - state.currentBearScore);
-  const leader = state.currentBullScore === state.currentBearScore ? "Tie" : state.currentBullScore > state.currentBearScore ? "Bull" : "Bear";
-
-  const dynamicNarrative = useMemo(() => {
-    const bullLead = state.currentBullScore - state.currentBearScore;
-    const bearLead = state.currentBearScore - state.currentBullScore;
-
-    const bullArgument =
-      bullLead >= 0
-        ? `Round ${currentRound}: Bull claims order-flow confirmation with a ${bullLead}-point lead and argues that follow-through is now a participation signal, not just price noise.`
-        : `Round ${currentRound}: Bull is in recovery mode, arguing that risk-reward improved after Bear pressure pushed conviction lower.`;
-
-    const bearArgument =
-      bearLead >= 0
-        ? `Round ${currentRound}: Bear highlights fragility in momentum and says upside is thin unless new liquidity appears.`
-        : `Round ${currentRound}: Bear acknowledges short-term strength but argues the move is extended and prone to mean reversion.`;
-
-    return {
-      bull: currentHistory?.bullArgument && currentHistory.bullArgument.trim().length > 20 ? currentHistory.bullArgument : bullArgument,
-      bear: currentHistory?.bearArgument && currentHistory.bearArgument.trim().length > 20 ? currentHistory.bearArgument : bearArgument,
-    };
-  }, [currentHistory?.bearArgument, currentHistory?.bullArgument, currentRound, state.currentBearScore, state.currentBullScore]);
 
   const feedBadge =
     feedMode === "live"

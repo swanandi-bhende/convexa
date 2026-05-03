@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { debateApi, type DebateState, type RoundHistoryResponse, type MarketSnapshot } from "@/lib/api/debateApi";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useUiSettings } from "@/hooks/useUiSettings";
+import { getDemoStakeStore, subscribeDemoStakeStore } from "@/lib/demoStake";
 
 interface DebateDataShape {
   state: DebateState | null;
@@ -13,6 +14,8 @@ interface DebateDataShape {
   loading: boolean;
   error: string | null;
   wsConnected: boolean;
+  feedMode: "live" | "polling" | "replay";
+  lastUpdateAt: number;
 }
 
 const defaultMarket: MarketSnapshot = {
@@ -88,6 +91,25 @@ function getMarketFromState(state: DebateState): MarketSnapshot {
   };
 }
 
+function buildStakeImpactRound(roundNumber: number, bullScore: number, bearScore: number): RoundHistoryResponse["rounds"][number] {
+  return {
+    roundNumber,
+    bullScore,
+    bearScore,
+    winner: bullScore === bearScore ? "tie" : bullScore > bearScore ? "bull" : "bear",
+    reasoning: `Stake flow rebalanced this round: Bull ${bullScore} vs Bear ${bearScore}.`,
+    accuracyBonusApplied: false,
+    accuracyBonusRecipient: null,
+    convictionUpdateStatus: "stake-adjusted",
+    timestamp: Date.now(),
+    convictionTxHash: null,
+    microSettlementTxHash: null,
+    roundDurationSeconds: 60,
+    bullArgument: `Bull cites incoming stake support as confirmation of directional conviction in round ${roundNumber}.`,
+    bearArgument: `Bear counters that stake size alone does not invalidate downside probability in round ${roundNumber}.`,
+  };
+}
+
 export function useDebateData(): DebateDataShape {
   const { demoMode, autoRefresh } = useUiSettings();
 
@@ -117,6 +139,12 @@ export function useDebateData(): DebateDataShape {
 
   const [demoState, setDemoState] = useState<DebateState | null>(null);
   const [demoHistory, setDemoHistory] = useState<RoundHistoryResponse["rounds"]>([]);
+  const [replayState, setReplayState] = useState<DebateState | null>(null);
+  const [replayHistory, setReplayHistory] = useState<RoundHistoryResponse["rounds"]>([]);
+  const [lastUpdateAt, setLastUpdateAt] = useState(Date.now());
+  const [clock, setClock] = useState(Date.now());
+  const [stakeBullDelta, setStakeBullDelta] = useState(0);
+  const [stakeBearDelta, setStakeBearDelta] = useState(0);
 
   useEffect(() => {
     if (!demoMode) {
@@ -129,6 +157,81 @@ export function useDebateData(): DebateDataShape {
     setDemoState(initial);
     setDemoHistory(getSeedHistory(initial));
   }, [demoMode]);
+
+  useEffect(() => {
+    const initial = getDemoStakeStore();
+    setStakeBullDelta(initial.bull);
+    setStakeBearDelta(initial.bear);
+
+    return subscribeDemoStakeStore((next) => {
+      setStakeBullDelta(next.bull);
+      setStakeBearDelta(next.bear);
+    });
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setClock(Date.now());
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (stateQuery.data || historyQuery.data || marketQuery.data || lastMessage) {
+      setLastUpdateAt(Date.now());
+    }
+  }, [stateQuery.data, historyQuery.data, marketQuery.data, lastMessage]);
+
+  const stalePolling = !demoMode && !wsConnected && autoRefresh && clock - lastUpdateAt > 30000;
+
+  useEffect(() => {
+    if (!stalePolling) {
+      setReplayState(null);
+      setReplayHistory([]);
+      return;
+    }
+
+    const baseState = stateQuery.data;
+    if (baseState && !replayState) {
+      setReplayState(baseState);
+      setReplayHistory(historyQuery.data?.rounds ?? []);
+    }
+
+    const timer = window.setInterval(() => {
+      setReplayState((previous) => {
+        const current = previous ?? stateQuery.data;
+        if (!current) {
+          return previous;
+        }
+
+        const nextRound = current.currentRound >= 10 ? 1 : current.currentRound + 1;
+        const bullNudge = (Math.random() > 0.5 ? 1 : -1) * (1 + Math.floor(Math.random() * 4));
+        const bearNudge = (Math.random() > 0.5 ? 1 : -1) * (1 + Math.floor(Math.random() * 4));
+        const nextBull = clampScore(current.currentBullScore + bullNudge);
+        const nextBear = clampScore(current.currentBearScore + bearNudge);
+
+        setReplayHistory((existing) => {
+          const nextEntry = buildDemoRound(nextRound, nextBull, nextBear);
+          return [nextEntry, ...existing.filter((item) => item.roundNumber !== nextEntry.roundNumber)].slice(0, 12);
+        });
+
+        return {
+          ...current,
+          currentRound: nextRound,
+          currentBullScore: nextBull,
+          currentBearScore: nextBear,
+          debateActive: nextBull < 70 && nextBear < 70,
+        };
+      });
+    }, 6000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [stalePolling, stateQuery.data, historyQuery.data?.rounds, replayState]);
 
   useEffect(() => {
     if (!demoMode || !autoRefresh) {
@@ -168,9 +271,55 @@ export function useDebateData(): DebateDataShape {
     };
   }, [demoMode, autoRefresh]);
 
+  useEffect(() => {
+    if (stakeBullDelta === 0 && stakeBearDelta === 0) {
+      return;
+    }
+
+    if (demoMode) {
+      setDemoState((previous) => {
+        if (!previous) {
+          return previous;
+        }
+
+        const nextBull = clampScore(previous.currentBullScore + Math.round(stakeBullDelta * 8));
+        const nextBear = clampScore(previous.currentBearScore + Math.round(stakeBearDelta * 8));
+        const nextRound = previous.currentRound >= 10 ? 1 : previous.currentRound + 1;
+
+        setDemoHistory((existing) => {
+          const entry = buildStakeImpactRound(nextRound, nextBull, nextBear);
+          return [entry, ...existing.filter((item) => item.roundNumber !== entry.roundNumber)].slice(0, 12);
+        });
+
+        return {
+          ...previous,
+          currentRound: nextRound,
+          currentBullScore: nextBull,
+          currentBearScore: nextBear,
+        };
+      });
+    }
+  }, [demoMode, stakeBullDelta, stakeBearDelta]);
+
   const resolvedState = useMemo(() => {
     if (demoMode) {
-      return demoState;
+      if (!demoState) {
+        return demoState;
+      }
+
+      return {
+        ...demoState,
+        bullStakeTotalEth: Number((demoState.bullStakeTotalEth + stakeBullDelta).toFixed(3)),
+        bearStakeTotalEth: Number((demoState.bearStakeTotalEth + stakeBearDelta).toFixed(3)),
+      };
+    }
+
+    if (stalePolling && replayState) {
+      return {
+        ...replayState,
+        bullStakeTotalEth: Number((replayState.bullStakeTotalEth + stakeBullDelta).toFixed(3)),
+        bearStakeTotalEth: Number((replayState.bearStakeTotalEth + stakeBearDelta).toFixed(3)),
+      };
     }
 
     if (!stateQuery.data) {
@@ -178,11 +327,20 @@ export function useDebateData(): DebateDataShape {
     }
 
     if (!lastMessage || lastMessage.type !== "debate.update") {
-      return stateQuery.data;
+      return {
+        ...stateQuery.data,
+        bullStakeTotalEth: Number((stateQuery.data.bullStakeTotalEth + stakeBullDelta).toFixed(3)),
+        bearStakeTotalEth: Number((stateQuery.data.bearStakeTotalEth + stakeBearDelta).toFixed(3)),
+      };
     }
 
-    return { ...stateQuery.data, ...lastMessage.payload };
-  }, [demoMode, demoState, lastMessage, stateQuery.data]);
+    return {
+      ...stateQuery.data,
+      ...lastMessage.payload,
+      bullStakeTotalEth: Number(((stateQuery.data.bullStakeTotalEth ?? 0) + stakeBullDelta).toFixed(3)),
+      bearStakeTotalEth: Number(((stateQuery.data.bearStakeTotalEth ?? 0) + stakeBearDelta).toFixed(3)),
+    };
+  }, [demoMode, demoState, lastMessage, replayState, stakeBearDelta, stakeBullDelta, stalePolling, stateQuery.data]);
 
   const error = useMemo(() => {
     if (demoMode) {
@@ -200,16 +358,27 @@ export function useDebateData(): DebateDataShape {
     if (demoMode) {
       return demoHistory;
     }
+
+    if (stalePolling && replayHistory.length > 0) {
+      return replayHistory;
+    }
+
     return historyQuery.data?.rounds ?? [];
-  }, [demoMode, demoHistory, historyQuery.data?.rounds]);
+  }, [demoMode, demoHistory, replayHistory, stalePolling, historyQuery.data?.rounds]);
 
   const resolvedMarket = useMemo(() => {
     if (demoMode) {
       return demoState ? getMarketFromState(demoState) : defaultMarket;
     }
 
-    return marketQuery.data ?? defaultMarket;
-  }, [demoMode, demoState, marketQuery.data]);
+      if (stalePolling && replayState) {
+        return getMarketFromState(replayState);
+      }
+
+      return marketQuery.data ?? defaultMarket;
+  }, [demoMode, demoState, replayState, stalePolling, marketQuery.data]);
+
+  const feedMode: DebateDataShape["feedMode"] = demoMode ? "replay" : wsConnected ? "live" : stalePolling ? "replay" : "polling";
 
   return useMemo(
     () => ({
@@ -219,7 +388,9 @@ export function useDebateData(): DebateDataShape {
       loading: demoMode ? !resolvedState : stateQuery.isLoading || historyQuery.isLoading || marketQuery.isLoading,
       error,
       wsConnected: demoMode ? false : wsConnected,
+      feedMode,
+      lastUpdateAt,
     }),
-    [resolvedState, resolvedHistory, resolvedMarket, demoMode, stateQuery.isLoading, historyQuery.isLoading, marketQuery.isLoading, error, wsConnected]
+    [resolvedState, resolvedHistory, resolvedMarket, demoMode, stateQuery.isLoading, historyQuery.isLoading, marketQuery.isLoading, error, wsConnected, feedMode, lastUpdateAt]
   );
 }

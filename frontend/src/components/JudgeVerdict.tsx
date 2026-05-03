@@ -3,9 +3,10 @@ interface JudgeVerdictProps {
   round: number;
   bullScore: number;
   bearScore: number;
+  rationale?: string;
 }
 
-export function JudgeVerdict({ pending, round, bullScore, bearScore }: JudgeVerdictProps) {
+export function JudgeVerdict({ pending, round, bullScore, bearScore, rationale }: JudgeVerdictProps) {
   const winner = bullScore === bearScore ? "Tie" : bullScore > bearScore ? "Bull" : "Bear";
   const winnerTone = winner === "Bull" ? "text-sky-300" : winner === "Bear" ? "text-orange-300" : "text-slate-300";
 
@@ -19,6 +20,9 @@ export function JudgeVerdict({ pending, round, bullScore, bearScore }: JudgeVerd
           <p className="text-sm text-slate-300">Round {round} winner</p>
           <p className={`mt-2 text-3xl font-semibold tracking-tight ${winnerTone}`}>{winner}</p>
           <p className="mt-2 text-sm text-slate-300">Bull {bullScore} vs Bear {bearScore}</p>
+          <p className="mt-3 text-sm leading-6 text-slate-300">
+            {rationale ?? `Judge favors ${winner} because the spread is ${Math.abs(bullScore - bearScore)} points and conviction momentum is stronger on that side.`}
+          </p>
         </div>
       )}
     </section>

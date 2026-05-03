@@ -113,3 +113,7 @@ Without AXL, Convexa would collapse into in-process function calls or a centrali
 ├── uniswap/       quote, calldata, execution, and settlement code
 └── utils/         shared constants, database access, market data, and risk logic
 ```
+
+## Demo Runbook
+
+Use the step-by-step demo script at [docs/DEMO_TEST_FLOW.md](docs/DEMO_TEST_FLOW.md).
